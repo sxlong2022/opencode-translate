@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
+import { readFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { generateText } from "ai"
 import { createCredentialResolver } from "./auth"
@@ -14,6 +17,73 @@ import {
   unwrapData,
 } from "./constants"
 import { buildSystemPrompt, buildUserPrompt } from "./prompts"
+
+interface OpenCodeProviderConfig {
+  baseURL?: string
+  apiKey?: string
+  [key: string]: unknown
+}
+
+interface OpenCodeProviderEntry {
+  npm?: string
+  name?: string
+  options?: OpenCodeProviderConfig
+  models?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+interface OpenCodeConfig {
+  provider?: Record<string, OpenCodeProviderEntry>
+  [key: string]: unknown
+}
+
+function resolveEnvVar(value: string): string {
+  // Resolve {env:VAR_NAME} syntax
+  const match = value.match(/^\{env:(.+)}$/)
+  if (match) {
+    const envVar = match[1]
+    return process.env[envVar] || ""
+  }
+  return value
+}
+
+async function readOpenCodeConfig(): Promise<OpenCodeConfig | undefined> {
+  // Try multiple locations for opencode.json
+  const configPaths = [
+    path.join(homedir(), ".config", "opencode", "opencode.json"),
+    path.join(homedir(), ".opencode", "opencode.json"),
+  ]
+
+  for (const configPath of configPaths) {
+    try {
+      const content = await readFile(configPath, "utf-8")
+      return JSON.parse(content) as OpenCodeConfig
+    } catch {
+      // File doesn't exist or invalid JSON, try next
+    }
+  }
+  return undefined
+}
+
+async function resolveProviderFromConfig(
+  providerID: string,
+): Promise<{ baseURL?: string; apiKey?: string }> {
+  const config = await readOpenCodeConfig()
+  if (!config?.provider?.[providerID]) return {}
+
+  const provider = config.provider[providerID]
+  const result: { baseURL?: string; apiKey?: string } = {}
+
+  if (provider.options?.baseURL) {
+    result.baseURL = provider.options.baseURL
+  }
+
+  if (provider.options?.apiKey) {
+    result.apiKey = resolveEnvVar(provider.options.apiKey)
+  }
+
+  return result
+}
 
 interface TranslatorDependencies {
   generateTextImpl?: typeof generateText
@@ -234,6 +304,10 @@ export function createTranslator(
     // Explicit baseURL in plugin options takes precedence
     if (options.baseURL) return options.baseURL
 
+    // Try to get baseURL from opencode.json provider config
+    const config = await resolveProviderFromConfig(providerID)
+    if (config.baseURL) return config.baseURL
+
     // Try to get baseURL from OpenCode's provider configuration
     try {
       const providers = unwrapData(await client.provider.list({ throwOnError: true }))
@@ -251,6 +325,10 @@ export function createTranslator(
   async function resolveApiKey(providerID: string): Promise<string | undefined> {
     // Explicit apiKey in plugin options takes precedence
     if (options.apiKey) return options.apiKey
+
+    // Try to get apiKey from opencode.json provider config
+    const config = await resolveProviderFromConfig(providerID)
+    if (config.apiKey) return config.apiKey
 
     // Try to get apiKey from OpenCode's provider configuration
     try {
