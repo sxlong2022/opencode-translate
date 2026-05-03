@@ -447,6 +447,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         const resolved = await resolveSessionState(client, ctx.directory, input.sessionID)
         const activeState = resolved.state
         if (!activeState) return
+        if (!options.translateResponses) return
 
         const message = unwrapData(
           await client.session.message({
