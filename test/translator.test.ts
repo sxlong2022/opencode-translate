@@ -128,7 +128,7 @@ describe("translator", () => {
     expect((output.parts[0] as TextPartLike).metadata?.translate_en).toBeUndefined()
   })
 
-  test("valid cached history rewrites user text without calling the translator", async () => {
+  test("transform leaves user parts untouched on the LLM-only twin architecture", async () => {
     let calls = 0
     const messages = [
       {
@@ -172,8 +172,13 @@ describe("translator", () => {
 
     await hooks["experimental.chat.messages.transform"]!({} as never, output as never)
 
+    // The translator must never run inside transform (no network in this
+    // hook), and the user-side source-language text is left untouched.
+    // The synthetic LLM-only English twin (added in `chat.message`) is
+    // what actually feeds the model; transform is responsible only for
+    // assistant-side trailer stripping now.
     expect(calls).toBe(0)
-    expect((output.messages[0].parts[0] as TextPartLike).text).toBe("EN:안녕")
+    expect((output.messages[0].parts[0] as TextPartLike).text).toBe("안녕")
   })
 
   test("hash mismatch in transform does not throw and does not call the translator", async () => {
@@ -260,8 +265,18 @@ describe("translator", () => {
 
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
+    // After two user-authored translations the layout is:
+    //   [0] "첫번째"           (source, ignored:true)
+    //   [1] "→ EN: EN:첫번째"  (UI preview)
+    //   [2] "EN:첫번째"        (LLM-only synthetic twin)
+    //   [3] compaction marker (untouched, was synthetic in input)
+    //   [4] "두번째"           (source, ignored:true)
+    //   [5] "→ EN: EN:두번째"  (UI preview)
+    //   [6] "EN:두번째"        (LLM-only synthetic twin)
+    //   [7] activation banner
     expect(calls).toBe(2)
-    expect((output.parts[2] as TextPartLike).text).toBe("compaction marker")
+    expect((output.parts[3] as TextPartLike).text).toBe("compaction marker")
+    expect((output.parts[3] as TextPartLike).synthetic).toBe(true)
   })
 
   test("missing credentials surface the exact auth-unavailable error", async () => {
