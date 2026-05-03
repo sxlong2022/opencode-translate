@@ -449,10 +449,10 @@ describe("activation", () => {
 
     expect(output.parts).toHaveLength(6)
     expect((output.parts[0] as TextPartLike).text).toBe("첫번째")
-    expect((output.parts[1] as TextPartLike).text).toBe("→ EN: EN:첫번째")
+    expect((output.parts[1] as TextPartLike).text).toBe("✓")
     expect((output.parts[2] as TextPartLike).type).toBe("file")
     expect((output.parts[3] as TextPartLike).text).toBe("두번째")
-    expect((output.parts[4] as TextPartLike).text).toBe("→ EN: EN:두번째")
+    expect((output.parts[4] as TextPartLike).text).toBe("✓")
     expect((output.parts[5] as TextPartLike).text).toContain("✓ Translation mode enabled")
     expect((output.parts[1] as TextPartLike).metadata?.translate_part_index).toBe(0)
     expect((output.parts[4] as TextPartLike).metadata?.translate_part_index).toBe(1)

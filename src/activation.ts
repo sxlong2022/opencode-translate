@@ -345,7 +345,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
             }
 
             nextParts.push(
-              createSyntheticTextPart(part.sessionID, part.messageID, `→ EN: ${english}`, {
+              createSyntheticTextPart(part.sessionID, part.messageID, "✓", {
                 translate_role: "translation_preview",
                 translate_nonce: activeState.translate_nonce,
                 translate_source_hash: sourceHash,
