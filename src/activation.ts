@@ -398,7 +398,6 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
     },
     "experimental.chat.messages.transform": async (_input, output) => {
       try {
-        writeFileSync("C:/Users/sxlon/AppData/Local/Temp/opencode-translate-debug.log", `${new Date().toISOString()} HOOK_FIRED chat.messages.transform\n`, { flag: "a" });
         const sessionID = output.messages[0]?.info.sessionID
         if (!sessionID) return
 
@@ -443,7 +442,6 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
     },
     "experimental.text.complete": async (input, output) => {
       try {
-        writeFileSync("C:/Users/sxlon/AppData/Local/Temp/opencode-translate-debug.log", `${new Date().toISOString()} HOOK_FIRED text.complete\n`, { flag: "a" });
         const resolved = await resolveSessionState(client, ctx.directory, input.sessionID)
         const activeState = resolved.state
         if (!activeState) return
