@@ -261,7 +261,7 @@ describe("translator", () => {
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
     expect(calls).toBe(2)
-    expect((output.parts[2] as TextPartLike).text).toBe("compaction marker")
+    expect((output.parts[1] as TextPartLike).text).toBe("compaction marker")
   })
 
   test("missing credentials surface the exact auth-unavailable error", async () => {

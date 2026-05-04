@@ -252,8 +252,8 @@ describe("activation", () => {
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
     expect(calls).toBe(1)
-    expect(output.parts).toHaveLength(2)
-    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_preview")
+    expect(output.parts).toHaveLength(1)
+    expect((output.parts[0] as TextPartLike).text).toBe("새 메시지")
   })
 
   test("forked untranslated session remains inactive", async () => {
@@ -321,8 +321,7 @@ describe("activation", () => {
     expect(calls).toEqual(["inbound"])
     expect((output.parts[0] as TextPartLike).text).toBe("안녕")
     expect((output.parts[0] as TextPartLike).metadata?.translate_en).toBe("EN:안녕")
-    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_preview")
-    expect((output.parts[2] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
+    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
   })
 
   test("inactive session cache skips later session lookups", async () => {
@@ -447,16 +446,12 @@ describe("activation", () => {
 
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
-    expect(output.parts).toHaveLength(6)
+    expect(output.parts).toHaveLength(4)
     expect((output.parts[0] as TextPartLike).text).toBe("첫번째")
-    expect((output.parts[1] as TextPartLike).text).toBe("✓")
-    expect((output.parts[2] as TextPartLike).type).toBe("file")
-    expect((output.parts[3] as TextPartLike).text).toBe("두번째")
-    expect((output.parts[4] as TextPartLike).text).toBe("✓")
-    expect((output.parts[5] as TextPartLike).text).toContain("✓ Translation mode enabled")
-    expect((output.parts[1] as TextPartLike).metadata?.translate_part_index).toBe(0)
-    expect((output.parts[4] as TextPartLike).metadata?.translate_part_index).toBe(1)
-    expect((output.parts[5] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
+    expect((output.parts[1] as TextPartLike).type).toBe("file")
+    expect((output.parts[2] as TextPartLike).text).toBe("두번째")
+    expect((output.parts[3] as TextPartLike).text).toContain("✓ Translation enabled")
+    expect((output.parts[3] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
   })
 
   test("OPENCODE_TRANSLATE_DISABLE=1 returns an empty hook map", () => {

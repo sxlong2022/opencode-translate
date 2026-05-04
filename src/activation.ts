@@ -90,7 +90,7 @@ function createState(options: ResolvedTranslateOptions): TranslateState {
 
 function createActivationBannerText(options: ResolvedTranslateOptions): string {
   const { modelID } = parseTranslatorModel(options.translatorModel)
-  return `✓ Translation mode enabled · translator: ${modelID} · source: ${options.sourceLanguage} · display: ${options.displayLanguage}`
+  return `✓ Translation enabled · ${modelID}`
 }
 
 function asMetadata(part: TextPartLike): StoredTextMetadata {
@@ -354,15 +354,6 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               ...(part.metadata ?? {}),
               ...mergeTranslatedMetadata(activeState, part, english),
             }
-
-            nextParts.push(
-              createSyntheticTextPart(part.sessionID, part.messageID, "✓", {
-                translate_role: "translation_preview",
-                translate_nonce: activeState.translate_nonce,
-                translate_source_hash: sourceHash,
-                translate_part_index: currentEligibleIndex,
-              }),
-            )
           } catch (error) {
             // Fall back to sending the original text to the LLM so the user
             // still gets a response. Surface the error as a synthetic part.
