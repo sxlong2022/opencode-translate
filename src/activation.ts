@@ -12,7 +12,6 @@ import {
   normalizeReason,
   PLUGIN_NAME,
   type PluginClientLike,
-  parseTranslatorModel,
   type ResolvedTranslateOptions,
   resolveOptions,
   SPEC_VERSION,
@@ -88,8 +87,7 @@ function createState(options: ResolvedTranslateOptions): TranslateState {
 }
 
 function createActivationBannerText(options: ResolvedTranslateOptions): string {
-  const { modelID } = parseTranslatorModel(options.translatorModel)
-  return `✓ Translation enabled · ${modelID}`
+  return `✓ Translation enabled · ${options.translatorModel}`
 }
 
 function asMetadata(part: TextPartLike): StoredTextMetadata {
@@ -349,7 +347,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         const nextParts: TextPartLike[] = []
         let eligibleIndex = 0
         const translationErrors: { part: TextPartLike; error: unknown }[] = []
-
+        let fallbackUsedModel: string | undefined
         for (const part of output.parts as TextPartLike[]) {
           nextParts.push(part)
           if (!activeState) continue
@@ -360,12 +358,16 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           if (part.text.trim().length === 0) continue
 
           try {
-            const english = await translator.translateText({
+            const translationResult = await translator.translateText({
               text: part.text,
               sourceLanguage: activeState.translate_source_lang,
               targetLanguage: LLM_LANGUAGE,
               direction: "inbound",
             })
+            const english = translationResult.text
+            if (options.fallbackModel && translationResult.modelUsed !== options.translatorModel) {
+              fallbackUsedModel = translationResult.modelUsed
+            }
 
             const sourceHash = hashText(part.text)
             part.metadata = {
@@ -424,6 +426,16 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               translate_spec_version: SPEC_VERSION,
             }),
           )
+          // Show fallback banner if fallback model was used
+          if (fallbackUsedModel) {
+            nextParts.push(
+              createSyntheticTextPart(input.sessionID, output.message.id, `⚠ Translation fallback: ${fallbackUsedModel}`, {
+                ...activeState,
+                translate_role: "activation_banner",
+                translate_spec_version: SPEC_VERSION,
+              }),
+            )
+          }
         }
 
         if (disabledThisTurn) {
@@ -485,7 +497,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         if (activeState.translate_display_lang === LLM_LANGUAGE || output.text.length === 0) return
 
         try {
-          const translated = await translator.translateText({
+          const translationResult = await translator.translateText({
             text: output.text,
             sourceLanguage: LLM_LANGUAGE,
             targetLanguage: activeState.translate_display_lang,
@@ -495,7 +507,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           output.text = composeTranslatedAssistantText(
             output.text,
             getDisplayLanguageLabel(activeState.translate_display_lang),
-            translated,
+            translationResult.text,
             activeState.translate_nonce,
           )
         } catch (error) {
@@ -523,14 +535,15 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
 
         const original = snapshotQuestions(args)
         try {
-          await translateQuestionArgs(args, (text) =>
-            translator.translateText({
+          await translateQuestionArgs(args, async (text) => {
+            const result = await translator.translateText({
               text,
               sourceLanguage: LLM_LANGUAGE,
               targetLanguage: activeState.translate_display_lang,
               direction: "outbound",
-            }),
-          )
+            })
+            return result.text
+          })
         } catch (error) {
           // Translation failed: restore the originals so the dialog at least
           // renders in English instead of a half-translated mess.

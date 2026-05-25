@@ -61,6 +61,9 @@ describe("translator", () => {
         sourceLanguage: "ko",
         displayLanguage: "ko",
         verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+        baseURL: "https://api.anthropic.com",
       },
       {
         credentialResolver: {
@@ -93,7 +96,7 @@ describe("translator", () => {
       direction: "inbound",
     })
 
-    expect(translated).toBe("hello")
+    expect(translated).toEqual({ text: "hello", modelUsed: "anthropic/claude-haiku-4-5" })
     expect(calls).toBe(2)
   })
 
@@ -151,7 +154,7 @@ describe("translator", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -204,7 +207,7 @@ describe("translator", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -244,7 +247,7 @@ describe("translator", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -286,6 +289,9 @@ describe("translator", () => {
         sourceLanguage: "ko",
         displayLanguage: "ko",
         verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+        baseURL: "https://api.anthropic.com",
       },
       {
         credentialResolver: {

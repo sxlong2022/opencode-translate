@@ -167,7 +167,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -197,7 +197,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -238,7 +238,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -272,7 +272,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text }) => {
             calls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -302,7 +302,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text, direction }) => {
             calls.push(direction)
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -345,7 +345,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text }) => {
             translatorCalls += 1
-            return `EN:${text}`
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -398,7 +398,7 @@ describe("activation", () => {
         translator: {
           translateText: async ({ text, direction }) => {
             calls.push(direction)
-            return direction === "inbound" ? `EN:${text}` : `KO:${text}`
+            return { text: direction === "inbound" ? `EN:${text}` : `KO:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -447,7 +447,7 @@ describe("activation", () => {
       { sourceLanguage: "ko", displayLanguage: "ko", translatorModel: "anthropic/claude-haiku-4-5" },
       {
         translator: {
-          translateText: async ({ text }) => `EN:${text}`,
+          translateText: async ({ text }) => ({ text: `EN:${text}`, modelUsed: "test/model" }),
         },
       },
     )

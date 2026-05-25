@@ -16,6 +16,7 @@ export type ProviderSource = "env" | "config" | "custom" | "api"
 
 export interface TranslateOptions {
   translatorModel?: string
+  fallbackModel?: string
   triggerKeywords?: string[]
   disableKeywords?: string[]
   sourceLanguage?: string
@@ -24,10 +25,12 @@ export interface TranslateOptions {
   baseURL?: string
   translateResponses?: boolean
   verbose?: boolean
+  providerOptions?: Record<string, unknown>
 }
 
 export interface ResolvedTranslateOptions {
   translatorModel: string
+  fallbackModel?: string
   triggerKeywords: string[]
   disableKeywords: string[]
   sourceLanguage: string
@@ -36,6 +39,7 @@ export interface ResolvedTranslateOptions {
   baseURL?: string
   translateResponses: boolean
   verbose: boolean
+  providerOptions?: Record<string, unknown>
 }
 
 export interface TranslateState {
@@ -191,6 +195,10 @@ export function resolveOptions(options: Record<string, unknown>): ResolvedTransl
       typeof options.translatorModel === "string" && options.translatorModel.includes("/")
         ? options.translatorModel
         : DEFAULT_TRANSLATOR_MODEL,
+    fallbackModel:
+      typeof options.fallbackModel === "string" && options.fallbackModel.includes("/")
+        ? options.fallbackModel
+        : undefined,
     triggerKeywords: triggerKeywords.length > 0 ? triggerKeywords : [...DEFAULT_TRIGGER_KEYWORDS],
     disableKeywords: disableKeywords.length > 0 ? disableKeywords : [...DEFAULT_DISABLE_KEYWORDS],
     sourceLanguage:
@@ -201,7 +209,11 @@ export function resolveOptions(options: Record<string, unknown>): ResolvedTransl
     baseURL: typeof options.baseURL === "string" && options.baseURL.length > 0 ? options.baseURL : undefined,
     translateResponses: options.translateResponses !== false,
     verbose: options.verbose === true,
-  }
+    providerOptions:
+      options.providerOptions && typeof options.providerOptions === "object" && !Array.isArray(options.providerOptions)
+        ? (options.providerOptions as Record<string, unknown>)
+        : undefined,
+}
 }
 
 export function getEnvVarHint(provider: ProviderInfo | undefined): string {

@@ -155,7 +155,7 @@ describe("tool.execute hooks", () => {
       { sourceLanguage: "ko", displayLanguage: "ko" },
       {
         translator: {
-          translateText: async ({ text }) => `[ko]${text}`,
+          translateText: async ({ text }) => ({ text: `[ko]${text}`, modelUsed: "test/model" }),
         },
       },
     )
@@ -211,7 +211,7 @@ describe("tool.execute hooks", () => {
       { sourceLanguage: "ko", displayLanguage: "ko" },
       {
         translator: {
-          translateText: async ({ text }) => `[ko]${text}`,
+          translateText: async ({ text }) => ({ text: `[ko]${text}`, modelUsed: "test/model" }),
         },
       },
     )

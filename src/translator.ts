@@ -103,6 +103,8 @@ interface TranslateTextInput {
 // Hard timeout for a single generateText call. Without this, a stalled
 // provider request can block the chat.message hook indefinitely.
 const DEFAULT_TRANSLATE_TIMEOUT_MS = 60_000
+// Fast timeout for primary model when fallback is available — fail quickly on VPN disconnection
+const FAST_TIMEOUT_MS = 10_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -121,9 +123,26 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 const providerFactoryCache = new Map<string, unknown>()
+let modelsDevCache: Record<string, { api?: string }> | undefined
+
+async function resolveModelsDevBaseURL(providerID: string): Promise<string | undefined> {
+  if (!modelsDevCache) {
+    try {
+      const res = await fetch("https://models.dev/api.json")
+      if (res.ok) {
+        const data = (await res.json()) as Record<string, { api?: string }>
+        modelsDevCache = data
+      }
+    } catch {
+      // Network unavailable - skip
+    }
+  }
+  return modelsDevCache?.[providerID]?.api
+}
 
 export function __resetTranslatorCachesForTest() {
   providerFactoryCache.clear()
+  modelsDevCache = undefined
 }
 
 function getStatus(error: unknown): number | undefined {
@@ -202,17 +221,19 @@ async function loadFactory(providerID: string): Promise<unknown> {
   } else if (providerID === "google") {
     const mod = await import("@ai-sdk/google")
     factory = mod.createGoogleGenerativeAI ?? mod.google
-  } else if (providerID === "google-vertex") {
-    const mod = await import("@ai-sdk/google-vertex")
-    factory = mod.createVertex ?? mod.vertex
-  } else if (providerID === "amazon-bedrock") {
-    const mod = await import("@ai-sdk/amazon-bedrock")
-    factory = mod.createAmazonBedrock ?? mod.bedrock
+  } else if (providerID === "google-vertex" || providerID === "amazon-bedrock") {
+    // These providers require non-standard credentials (GCP project/location or AWS
+    // region/access keys) that cannot be inferred from a simple apiKey. Fail fast
+    // with a clear message rather than silently falling back to openai-compatible.
+    throw new Error(
+      `Provider "${providerID}" requires credentials that opencode-translate cannot resolve automatically. ` +
+        `Use a different translatorModel (e.g. anthropic/..., openai/..., or a custom openai-compatible provider).`,
+    )
   } else if (providerID === "github-copilot" || providerID === "openai-compatible") {
     const mod = await import("@ai-sdk/openai-compatible")
     factory = mod.createOpenAICompatible
   } else {
-    // Unknown provider: default to openai-compatible (custom endpoints like LongCat)
+    // Unknown provider: treat as openai-compatible (custom endpoints like LongCat, SiliconFlow)
     const mod = await import("@ai-sdk/openai-compatible")
     factory = mod.createOpenAICompatible
   }
@@ -257,7 +278,17 @@ function instantiateProvider(
     })
   }
 
-  return (factory as (config: Record<string, unknown>) => unknown)(config)
+  // Unknown provider: treated as openai-compatible (custom endpoints like LongCat, SiliconFlow).
+  // Native SDK providers (anthropic, openai, google, etc.) have their own baseURL defaults,
+  // so only require baseURL for genuinely custom/unknown providers.
+  const NATIVE_PROVIDERS = new Set(["anthropic", "openai", "google", "google-vertex", "amazon-bedrock"])
+  if (!NATIVE_PROVIDERS.has(providerID) && !credentials.baseURL) {
+    throw new Error(`Custom provider "${providerID}" requires a baseURL. Add it under provider.${providerID}.options.baseURL in opencode.json.`)
+  }
+  return (factory as (config: Record<string, unknown>) => unknown)({
+    ...config,
+    ...(!NATIVE_PROVIDERS.has(providerID) ? { name: providerID } : {}),
+  })
 }
 
 function instantiateModel(provider: unknown, modelID: string): unknown {
@@ -319,7 +350,9 @@ export function createTranslator(
       // Ignore errors from provider list
     }
 
-    return undefined
+    // Final fallback: models.dev catalog (covers built-in openai-compatible providers
+    // like nvidia whose endpoint is not exposed in provider.list() options)
+    return resolveModelsDevBaseURL(providerID)
   }
 
   async function resolveApiKey(providerID: string): Promise<string | undefined> {
@@ -349,52 +382,73 @@ export function createTranslator(
     return undefined
   }
 
-  async function translateText(input: TranslateTextInput): Promise<string> {
-    if (!input.text) return input.text
-    if (input.sourceLanguage === input.targetLanguage) return input.text
+  async function translateText(input: TranslateTextInput): Promise<{ text: string; modelUsed: string }> {
+    if (!input.text) return { text: input.text, modelUsed: options.translatorModel }
+    if (input.sourceLanguage === input.targetLanguage) return { text: input.text, modelUsed: options.translatorModel }
 
     const startedAt = now()
-    const { providerID, modelID } = parseTranslatorModel(options.translatorModel)
-    const credentials = await credentialResolver.resolve(options.translatorModel)
-    const resolvedBaseURL = await resolveBaseURL(providerID)
-    const resolvedApiKey = !credentials.apiKey ? await resolveApiKey(providerID) : undefined
-    const factory = await loadFactory(providerID)
-    const provider = instantiateProvider(factory, providerID, {
-      ...credentials,
-      ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
-      baseURL: resolvedBaseURL,
-    })
-    const model = instantiateModel(provider, modelID)
 
-    const translated = await withRetry(async () => {
-      try {
-        const result = (await withTimeout(
-          generateTextImpl({
-            model: model as never,
-            system: buildSystemPrompt({
-              sourceLanguage: input.sourceLanguage,
-              targetLanguage: input.targetLanguage,
-              text: input.text,
-            }),
-            temperature: 0,
-            prompt: buildUserPrompt({
-              sourceLanguage: input.sourceLanguage,
-              targetLanguage: input.targetLanguage,
-              text: input.text,
-            }),
-          }) as Promise<{ text: string }>,
-          timeoutMs,
-          "Translator generateText",
-        )) as { text: string }
-        return result.text
-      } catch (error) {
-        if (isAuthMessage(error)) throw error
-        if (credentials.mode === "default" && credentialResolver.isMissingCredentialError(error)) {
-          throw modelProviderHint(providerID, credentials.provider)
+    async function attemptTranslation(modelString: string, { retry = true } = {}): Promise<string> {
+      const { providerID, modelID } = parseTranslatorModel(modelString)
+      const credentials = await credentialResolver.resolve(modelString)
+      const resolvedBaseURL = await resolveBaseURL(providerID)
+      const resolvedApiKey = !credentials.apiKey ? await resolveApiKey(providerID) : undefined
+      const factory = await loadFactory(providerID)
+      const provider = instantiateProvider(factory, providerID, {
+        ...credentials,
+        ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
+        baseURL: resolvedBaseURL,
+      })
+      const model = instantiateModel(provider, modelID)
+
+      const doTranslate = async () => {
+        try {
+          const result = (await withTimeout(
+            generateTextImpl({
+              model: model as never,
+              system: buildSystemPrompt({
+                sourceLanguage: input.sourceLanguage,
+                targetLanguage: input.targetLanguage,
+                text: input.text,
+              }),
+              temperature: 0,
+              prompt: buildUserPrompt({
+                sourceLanguage: input.sourceLanguage,
+                targetLanguage: input.targetLanguage,
+                text: input.text,
+              }),
+              ...(options.providerOptions ? { providerOptions: options.providerOptions as never } : {}),
+            }) as Promise<{ text: string }>,
+            retry ? timeoutMs : FAST_TIMEOUT_MS,
+            "Translator generateText",
+          )) as { text: string }
+          return result.text
+        } catch (error) {
+          if (isAuthMessage(error)) throw error
+          if (credentials.mode === "default" && credentialResolver.isMissingCredentialError(error)) {
+            throw modelProviderHint(providerID, credentials.provider)
+          }
+          throw error
         }
-        throw error
       }
-    }, sleepImpl)
+
+      return retry ? withRetry(doTranslate, sleepImpl) : doTranslate()
+    }
+
+    let translated: string
+    let usedModel = options.translatorModel
+    try {
+      // Fast-fail on primary only when fallback is available (VPN disconnection won't resolve by retrying the same endpoint)
+      translated = await attemptTranslation(options.translatorModel, { retry: !options.fallbackModel })
+    } catch (primaryError) {
+      if (options.fallbackModel) {
+        usedModel = options.fallbackModel
+        // Fallback: normal retry — different network path, transient errors may resolve
+        translated = await attemptTranslation(options.fallbackModel, { retry: true })
+      } else {
+        throw primaryError
+      }
+    }
 
     if (options.verbose) {
       await client.app.log({
@@ -408,13 +462,13 @@ export function createTranslator(
             chars_out: translated.length,
             ms: now() - startedAt,
             cached: false,
-            model: options.translatorModel,
+            model: usedModel,
           },
         },
       })
     }
 
-    return translated
+    return { text: translated, modelUsed: usedModel }
   }
 
   return {
