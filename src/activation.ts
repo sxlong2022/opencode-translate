@@ -62,7 +62,7 @@ interface HookDependencies {
       sourceLanguage: string
       targetLanguage: string
       direction: "inbound" | "outbound"
-    }): Promise<string>
+    }): Promise<{ text: string; modelUsed: string }>
   }
 }
 

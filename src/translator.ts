@@ -417,6 +417,7 @@ export function createTranslator(
                 targetLanguage: input.targetLanguage,
                 text: input.text,
               }),
+              maxRetries: 0,
               ...(options.providerOptions ? { providerOptions: options.providerOptions as never } : {}),
             }) as Promise<{ text: string }>,
             retry ? timeoutMs : FAST_TIMEOUT_MS,

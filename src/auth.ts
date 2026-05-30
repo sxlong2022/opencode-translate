@@ -59,9 +59,6 @@ export function __resetAuthCachesForTest() {
 function authFilePath(): string {
   const xdgDataHome = process.env.XDG_DATA_HOME
   if (xdgDataHome) return path.join(xdgDataHome, "opencode", "auth.json")
-  if (process.platform === "win32") {
-    return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "opencode", "auth.json")
-  }
   return path.join(os.homedir(), ".local", "share", "opencode", "auth.json")
 }
 

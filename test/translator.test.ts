@@ -100,6 +100,60 @@ describe("translator", () => {
     expect(calls).toBe(2)
   })
 
+  test("falls back to the fallback model on primary model failure immediately without primary retries", async () => {
+    let calls = 0
+    const translator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "anthropic/claude-haiku-4-5",
+        fallbackModel: "openai/gpt-5.4",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+        baseURL: "https://api.anthropic.com",
+      },
+      {
+        credentialResolver: {
+          resolve: async (model) => ({
+            providerID: model.split("/")[0],
+            apiKey: "test-key",
+            mode: "apiKey" as const,
+          }),
+          isMissingCredentialError: () => false,
+          authUnavailable: () => new Error("unused"),
+          envFallback: "API_KEY",
+        },
+        generateTextImpl: async (args: any) => {
+          calls += 1
+          if (calls === 1) {
+            const error = new Error("HTTP 500") as Error & { status?: number }
+            error.status = 500
+            throw error
+          }
+          return { text: "fallback-hello" } as never
+        },
+        sleep: async () => undefined,
+        now: (() => {
+          let value = 0
+          return () => (value += 10)
+        })(),
+      },
+    )
+
+    const translated = await translator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    expect(translated).toEqual({ text: "fallback-hello", modelUsed: "openai/gpt-5.4" })
+    expect(calls).toBe(2)
+  })
+
   test("final failure in chat.message does not throw and falls back to the untranslated text", async () => {
     const hooks = createHooks(
       {
