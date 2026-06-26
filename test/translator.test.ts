@@ -380,4 +380,109 @@ describe("translator", () => {
       '[opencode-translate:AUTH_UNAVAILABLE] No credential found for provider "anthropic". Set ANTHROPIC_API_KEY in the environment, run "opencode auth login anthropic", or set options.apiKey in opencode.json.',
     )
   })
+
+  test("model-specific providerOptions are correctly passed based on the model used", async () => {
+    let capturedOptions: any = null
+    const translator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "cloudflare/gemma-it",
+        fallbackModel: "cloudflare/llama-instruct",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+        translatorProviderOptions: {
+          cloudflare: { reasoning_effort: "low" },
+        },
+        fallbackProviderOptions: {
+          cloudflare: { fallback_only: true },
+        },
+      },
+      {
+        credentialResolver: {
+          resolve: async () => ({
+            providerID: "cloudflare",
+            mode: "apiKey" as const,
+            apiKey: "test-key",
+}),
+          isMissingCredentialError: () => false,
+          authUnavailable: () => new Error("unused"),
+          envFallback: "CLOUDFLARE_API_KEY",
+        },
+generateTextImpl: async (args: any) => {
+capturedOptions = args.providerOptions
+          return { text: "Hello" } as never
+},
+        sleep: async () => undefined,
+      },
+    )
+
+    // Call translation (primary model is used first)
+    const result = await translator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    expect(result.text).toBe("Hello")
+    expect(result.modelUsed).toBe("cloudflare/gemma-it")
+    expect(capturedOptions).toEqual({ cloudflare: { reasoning_effort: "low" } })
+
+    // Now test fallback
+    let fallbackCapturedOptions: any = null
+    const fallbackTranslator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "cloudflare/gemma-it",
+        fallbackModel: "cloudflare/llama-instruct",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+        translatorProviderOptions: {
+          cloudflare: { reasoning_effort: "low" },
+        },
+        fallbackProviderOptions: {
+          cloudflare: { fallback_only: true },
+        },
+      },
+      {
+        credentialResolver: {
+          resolve: async () => ({
+            providerID: "cloudflare",
+            mode: "apiKey" as const,
+            apiKey: "test-key",
+          }),
+          isMissingCredentialError: () => false,
+          authUnavailable: () => new Error("unused"),
+          envFallback: "CLOUDFLARE_API_KEY",
+        },
+generateTextImpl: async (args: any) => {
+if (args.model && typeof args.model === "object" && args.model.modelId === "gemma-it") {
+throw new Error("Primary model failed")
+}
+fallbackCapturedOptions = args.providerOptions
+          return { text: "Hello from fallback" } as never
+},
+        sleep: async () => undefined,
+      },
+    )
+
+    const fallbackResult = await fallbackTranslator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    expect(fallbackResult.text).toBe("Hello from fallback")
+    expect(fallbackResult.modelUsed).toBe("cloudflare/llama-instruct")
+    expect(fallbackCapturedOptions).toEqual({ cloudflare: { fallback_only: true } })
+  })
 })

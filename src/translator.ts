@@ -390,16 +390,61 @@ export function createTranslator(
 
     async function attemptTranslation(modelString: string, { retry = true } = {}): Promise<string> {
       const { providerID, modelID } = parseTranslatorModel(modelString)
-      const credentials = await credentialResolver.resolve(modelString)
-      const resolvedBaseURL = await resolveBaseURL(providerID)
+const credentials = await credentialResolver.resolve(modelString)
+const resolvedBaseURL = await resolveBaseURL(providerID)
       const resolvedApiKey = !credentials.apiKey ? await resolveApiKey(providerID) : undefined
-      const factory = await loadFactory(providerID)
-      const provider = instantiateProvider(factory, providerID, {
+
+      const baseFetch = credentials.fetch ?? fetch
+      const robustFetch: FetchLike = async (input, init) => {
+        let lastError: unknown
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+return await baseFetch(input, {
+...init,
+              // @ts-ignore
+              ...(options.verbose ? {
+              verbose: true } : {
+            }),
+            })
+          } catch (error) {
+            lastError = error
+            const msg = String(error).toLowerCase()
+            const isNetworkError =
+              msg.includes("socket") ||
+              msg.includes("fetch") ||
+              msg.includes("network") ||
+              msg.includes("econn") ||
+              msg.includes("closed")
+            if (!isNetworkError || attempt === 3) {
+              throw error
+            }
+            if (options.verbose) {
+              await client.app.log({
+                body: {
+                  service: PLUGIN_NAME,
+                  level: "warn",
+                  message: `Fetch failed (attempt ${attempt}/3): ${msg}. Retrying...`,
+                },
+              })
+            }
+            await sleepImpl(500 * Math.pow(2, attempt - 1))
+          }
+        }
+        throw lastError
+      }
+const factory = await loadFactory(providerID)
+const provider = instantiateProvider(factory, providerID, {
         ...credentials,
-        ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
-        baseURL: resolvedBaseURL,
-      })
+        fetch: robustFetch,
+...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
+baseURL: resolvedBaseURL,
+})
       const model = instantiateModel(provider, modelID)
+
+      const modelProviderOptions =
+        modelString === options.translatorModel
+          ? (options.translatorProviderOptions ?? options.providerOptions)
+          : (options.fallbackProviderOptions ?? options.providerOptions)
 
       const doTranslate = async () => {
         try {
@@ -418,7 +463,7 @@ export function createTranslator(
                 text: input.text,
               }),
               maxRetries: 0,
-              ...(options.providerOptions ? { providerOptions: options.providerOptions as never } : {}),
+              ...(modelProviderOptions ? { providerOptions: modelProviderOptions as never } : {}),
             }) as Promise<{ text: string }>,
             retry ? timeoutMs : FAST_TIMEOUT_MS,
             "Translator generateText",

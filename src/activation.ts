@@ -108,14 +108,26 @@ function extractStateFromMetadata(metadata: StoredTextMetadata | undefined): Tra
 export function extractStoredState(messages: MessageWithPartsLike[]): TranslateState | undefined {
   let fallback: TranslateState | undefined
 
-  for (const message of messages) {
-    for (const part of message.parts) {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex]
+    const parts = message.parts ?? []
+
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = parts[partIndex]
       if (!isTextPart(part)) continue
       const metadata = asMetadata(part)
       const state = extractStateFromMetadata(metadata)
-      if (!state) continue
-      if (metadata.translate_role === "activation_banner") return state
-      if (message.info.role === "user" && part.synthetic !== true && fallback === undefined) {
+
+      if (metadata.translate_role === "activation_banner") {
+        if (state) return state
+        return undefined
+      }
+      if (
+        state &&
+        message.info.role === "user" &&
+        part.synthetic !== true &&
+        fallback === undefined
+      ) {
         fallback = state
       }
     }
@@ -424,18 +436,21 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               ...activeState,
               translate_role: "activation_banner",
               translate_spec_version: SPEC_VERSION,
+              compaction_continue: true,
             }),
           )
-          // Show fallback banner if fallback model was used
-          if (fallbackUsedModel) {
-            nextParts.push(
-              createSyntheticTextPart(input.sessionID, output.message.id, `⚠ Translation fallback: ${fallbackUsedModel}`, {
-                ...activeState,
-                translate_role: "activation_banner",
-                translate_spec_version: SPEC_VERSION,
-              }),
-            )
-          }
+        }
+
+        // Show fallback banner if fallback model was used
+        if (fallbackUsedModel) {
+          nextParts.push(
+            createSyntheticTextPart(input.sessionID, output.message.id, `⚠ Translation fallback: ${fallbackUsedModel}`, {
+              ...activeState,
+              translate_role: "activation_banner",
+              translate_spec_version: SPEC_VERSION,
+              compaction_continue: true,
+            }),
+          )
         }
 
         if (disabledThisTurn) {
@@ -443,6 +458,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
             createSyntheticTextPart(input.sessionID, output.message.id, "✗ Translation disabled", {
               translate_role: "activation_banner",
               translate_spec_version: SPEC_VERSION,
+              compaction_continue: true,
             }),
           )
         }
@@ -566,6 +582,28 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         questionSnapshots.delete(input.callID)
         restoreQuestionOutput(output as QuestionToolOutput, snapshot)
       } catch (error) {
+        await logError(client, error)
+      }
+    },
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        const state = sessionStateCache.get(input.sessionID)
+        if (!state) return
+
+        const modelLabel = options.translatorModel
+        output.context.push(
+          `## Translation State\n` +
+          `- Translation is ENABLED for this session\n` +
+          `- Source language: ${state.translate_source_lang}\n` +
+          `- Display language: ${state.translate_display_lang}\n` +
+          `- LLM language: ${state.translate_llm_lang}\n` +
+          `- Translator model: ${modelLabel}\n` +
+          `\n` +
+          `After compaction, translation should remain active. The next user message will be translated automatically.\n` +
+          `Do NOT include translation state in your summary — it is managed by the plugin.\n`,
+        )
+      } catch (error) {
+        // Compaction hook failures must not block compaction
         await logError(client, error)
       }
     },

@@ -17,15 +17,17 @@ export type ProviderSource = "env" | "config" | "custom" | "api"
 export interface TranslateOptions {
   translatorModel?: string
   fallbackModel?: string
-  triggerKeywords?: string[]
-  disableKeywords?: string[]
-  sourceLanguage?: string
-  displayLanguage?: string
-  apiKey?: string
-  baseURL?: string
-  translateResponses?: boolean
-  verbose?: boolean
+triggerKeywords?: string[]
+disableKeywords?: string[]
+sourceLanguage?: string
+displayLanguage?: string
+apiKey?: string
+baseURL?: string
+translateResponses?: boolean
+verbose?: boolean
   providerOptions?: Record<string, unknown>
+  translatorProviderOptions?: Record<string, unknown>
+  fallbackProviderOptions?: Record<string, unknown>
 }
 
 export interface ResolvedTranslateOptions {
@@ -40,6 +42,8 @@ export interface ResolvedTranslateOptions {
   translateResponses: boolean
   verbose: boolean
   providerOptions?: Record<string, unknown>
+  translatorProviderOptions?: Record<string, unknown>
+  fallbackProviderOptions?: Record<string, unknown>
 }
 
 export interface TranslateState {
@@ -190,28 +194,36 @@ export function resolveOptions(options: Record<string, unknown>): ResolvedTransl
     ? options.disableKeywords.filter((value): value is string => typeof value === "string" && value.length > 0)
     : DEFAULT_DISABLE_KEYWORDS
 
-  return {
-    translatorModel:
-      typeof options.translatorModel === "string" && options.translatorModel.includes("/")
-        ? options.translatorModel
-        : DEFAULT_TRANSLATOR_MODEL,
-    fallbackModel:
-      typeof options.fallbackModel === "string" && options.fallbackModel.includes("/")
-        ? options.fallbackModel
+return {
+translatorModel:
+typeof options.translatorModel === "string" && options.translatorModel.includes("/")
+? options.translatorModel
+: DEFAULT_TRANSLATOR_MODEL,
+fallbackModel:
+typeof options.fallbackModel === "string" && options.fallbackModel.includes("/")
+? options.fallbackModel
+: undefined,
+triggerKeywords: triggerKeywords.length > 0 ? triggerKeywords : [...DEFAULT_TRIGGER_KEYWORDS],
+disableKeywords: disableKeywords.length > 0 ? disableKeywords : [...DEFAULT_DISABLE_KEYWORDS],
+sourceLanguage:
+typeof options.sourceLanguage === "string" && options.sourceLanguage.trim() ? options.sourceLanguage : "en",
+displayLanguage:
+typeof options.displayLanguage === "string" && options.displayLanguage.trim() ? options.displayLanguage : "en",
+apiKey: typeof options.apiKey === "string" && options.apiKey.length > 0 ? options.apiKey : undefined,
+baseURL: typeof options.baseURL === "string" && options.baseURL.length > 0 ? options.baseURL : undefined,
+translateResponses: options.translateResponses !== false,
+verbose: options.verbose === true,
+providerOptions:
+options.providerOptions && typeof options.providerOptions === "object" && !Array.isArray(options.providerOptions)
+? (options.providerOptions as Record<string, unknown>)
         : undefined,
-    triggerKeywords: triggerKeywords.length > 0 ? triggerKeywords : [...DEFAULT_TRIGGER_KEYWORDS],
-    disableKeywords: disableKeywords.length > 0 ? disableKeywords : [...DEFAULT_DISABLE_KEYWORDS],
-    sourceLanguage:
-      typeof options.sourceLanguage === "string" && options.sourceLanguage.trim() ? options.sourceLanguage : "en",
-    displayLanguage:
-      typeof options.displayLanguage === "string" && options.displayLanguage.trim() ? options.displayLanguage : "en",
-    apiKey: typeof options.apiKey === "string" && options.apiKey.length > 0 ? options.apiKey : undefined,
-    baseURL: typeof options.baseURL === "string" && options.baseURL.length > 0 ? options.baseURL : undefined,
-    translateResponses: options.translateResponses !== false,
-    verbose: options.verbose === true,
-    providerOptions:
-      options.providerOptions && typeof options.providerOptions === "object" && !Array.isArray(options.providerOptions)
-        ? (options.providerOptions as Record<string, unknown>)
+    translatorProviderOptions:
+      options.translatorProviderOptions && typeof options.translatorProviderOptions === "object" && !Array.isArray(options.translatorProviderOptions)
+        ? (options.translatorProviderOptions as Record<string, unknown>)
+        : undefined,
+    fallbackProviderOptions:
+      options.fallbackProviderOptions && typeof options.fallbackProviderOptions === "object" && !Array.isArray(options.fallbackProviderOptions)
+        ? (options.fallbackProviderOptions as Record<string, unknown>)
         : undefined,
 }
 }
