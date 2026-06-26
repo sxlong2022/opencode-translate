@@ -502,4 +502,132 @@ describe("activation", () => {
       else process.env.OPENCODE_TRANSLATE_DISABLE = previous
     }
   })
+
+  test("activation banner has compaction_continue flag", async () => {
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko", translatorModel: "test/model" },
+      {
+        translator: {
+          translateText: async ({ text }) => ({ text: `EN:${text}`, modelUsed: "test/model" }),
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_new" },
+      parts: [textPart("p1", "$en 안녕")],
+    }
+
+    await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
+
+    // Find the activation banner part
+    const banner = output.parts.find(
+      (p) => (p as TextPartLike).metadata?.translate_role === "activation_banner",
+    ) as TextPartLike | undefined
+
+    expect(banner).toBeDefined()
+    expect(banner!.metadata?.compaction_continue).toBe(true)
+    expect(banner!.metadata?.translate_enabled).toBe(true)
+    expect(banner!.metadata?.translate_source_lang).toBe("ko")
+  })
+
+  test("session.compacting hook injects translation state into context", async () => {
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko", translatorModel: "cloudflare/@cf/google/gemma-4-26b-a4b-it" },
+      {
+        translator: {
+          translateText: async ({ text }) => ({ text: `EN:${text}`, modelUsed: "test/model" }),
+        },
+      },
+    )
+
+    // First, activate translation
+    const activateOutput = {
+      message: { id: "msg_new" },
+      parts: [textPart("p1", "$en 안녕")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_1" }, activateOutput as never)
+
+    // Now, simulate compaction
+    const compactionOutput = {
+      context: [] as string[],
+    }
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_1" } as never,
+      compactionOutput as never,
+    )
+
+    // Verify the context was injected
+    expect(compactionOutput.context).toHaveLength(1)
+    const context = compactionOutput.context[0]
+    expect(context).toContain("Translation is ENABLED")
+    expect(context).toContain("Source language: ko")
+    expect(context).toContain("Display language: ko")
+    expect(context).toContain("Translator model: cloudflare/@cf/google/gemma-4-26b-a4b-it")
+  })
+
+  test("session.compacting hook does nothing when translation is not active", async () => {
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko" },
+    )
+
+    // Simulate compaction without prior activation
+    const compactionOutput = {
+      context: [] as string[],
+    }
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_1" } as never,
+      compactionOutput as never,
+    )
+
+    // Verify no context was injected
+    expect(compactionOutput.context).toHaveLength(0)
+  })
+
+  test("extractStoredState reverse scan prefers latest activation banner", () => {
+    const state = makeState()
+    const enabledBanner = textPart("banner1", "enabled", {
+      synthetic: true,
+      ignored: true,
+      metadata: {
+        ...state,
+        translate_role: "activation_banner",
+      },
+    })
+    const disabledBanner = textPart("banner2", "disabled", {
+      synthetic: true,
+      ignored: true,
+      metadata: {
+        translate_role: "activation_banner",
+      },
+    })
+
+    // Case 1: Enabled banner followed by Disabled banner (chronological order)
+    // Reverse scan should encounter Disabled banner first and return undefined (disabled)
+    const result1 = extractStoredState([
+      storedMessage([enabledBanner]),
+      storedMessage([disabledBanner]),
+    ])
+    expect(result1).toBeUndefined()
+
+    // Case 2: Disabled banner followed by Enabled banner (chronological order)
+    // Reverse scan should encounter Enabled banner first and return the state (enabled)
+    const result2 = extractStoredState([
+      storedMessage([disabledBanner]),
+      storedMessage([enabledBanner]),
+    ])
+    expect(result2).toEqual(state)
+  })
 })
