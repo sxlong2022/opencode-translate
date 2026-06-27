@@ -383,8 +383,27 @@ describe("translator", () => {
 
   test("model-specific providerOptions are correctly passed based on the model used", async () => {
     let capturedOptions: any = null
+    const customClient: any = {
+      ...fakeClient([]),
+      provider: {
+        list: async () => ({
+          all: [
+            {
+              id: "cloudflare",
+              source: "api",
+              key: "test-key",
+              env: ["CLOUDFLARE_API_KEY"],
+              options: {
+                baseURL: "https://api.cloudflare.com/client/v4",
+              },
+              models: {},
+            },
+          ],
+        }),
+      },
+    }
     const translator = createTranslator(
-      fakeClient([]),
+      customClient,
       {
         translatorModel: "cloudflare/gemma-it",
         fallbackModel: "cloudflare/llama-instruct",
@@ -407,7 +426,8 @@ describe("translator", () => {
             providerID: "cloudflare",
             mode: "apiKey" as const,
             apiKey: "test-key",
-}),
+            baseURL: "https://api.cloudflare.com/client/v4",
+          }),
           isMissingCredentialError: () => false,
           authUnavailable: () => new Error("unused"),
           envFallback: "CLOUDFLARE_API_KEY",
@@ -435,7 +455,7 @@ capturedOptions = args.providerOptions
     // Now test fallback
     let fallbackCapturedOptions: any = null
     const fallbackTranslator = createTranslator(
-      fakeClient([]),
+      customClient,
       {
         translatorModel: "cloudflare/gemma-it",
         fallbackModel: "cloudflare/llama-instruct",
@@ -458,6 +478,7 @@ capturedOptions = args.providerOptions
             providerID: "cloudflare",
             mode: "apiKey" as const,
             apiKey: "test-key",
+            baseURL: "https://api.cloudflare.com/client/v4",
           }),
           isMissingCredentialError: () => false,
           authUnavailable: () => new Error("unused"),

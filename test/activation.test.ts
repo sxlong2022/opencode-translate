@@ -155,7 +155,7 @@ describe("activation", () => {
     expect(withFallback).toEqual(state)
   })
 
-  test("first-message-only activation ignores later triggers", async () => {
+  test("activation is allowed in non-fresh root sessions", async () => {
     let calls = 0
     const hooks = createHooks(
       {
@@ -180,9 +180,10 @@ describe("activation", () => {
 
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
-    expect(calls).toBe(0)
-    expect(output.parts).toHaveLength(1)
-    expect((output.parts[0] as TextPartLike).text).toBe("hello $en world")
+    expect(calls).toBe(1)
+    expect(output.parts).toHaveLength(3)
+    expect((output.parts[0] as TextPartLike).text).toBe("hello world")
+    expect((output.parts[1] as TextPartLike).text).toBe("EN:hello world")
   })
 
   test("child sessions are a no-op", async () => {
@@ -254,10 +255,21 @@ describe("activation", () => {
     expect(calls).toBe(1)
     expect(output.parts).toHaveLength(2)
     expect((output.parts[0] as TextPartLike).text).toBe("새 메시지")
-    expect((output.parts[0] as TextPartLike).ignored).toBe(true)
+    expect((output.parts[0] as TextPartLike).ignored).toBeFalsy()
     expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("llm_only_translation")
     expect((output.parts[1] as TextPartLike).synthetic).toBe(true)
     expect((output.parts[1] as TextPartLike).text).toBe("EN:새 메시지")
+
+    const transformOutput = {
+      messages: [
+        {
+          info: { role: "user", sessionID: "ses_1" },
+          parts: output.parts,
+        }
+      ]
+    }
+    await hooks["experimental.chat.messages.transform"]!({} as never, transformOutput as never)
+    expect((transformOutput.messages[0].parts[0] as TextPartLike).ignored).toBe(true)
   })
 
   test("forked untranslated session remains inactive", async () => {
@@ -321,14 +333,25 @@ describe("activation", () => {
 
     await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
 
-    expect(counted.calls).toEqual({ get: 2, messages: 2, message: 0 })
+    expect(counted.calls).toEqual({ get: 1, messages: 1, message: 0 })
     expect(calls).toEqual(["inbound"])
     expect((output.parts[0] as TextPartLike).text).toBe("안녕")
-    expect((output.parts[0] as TextPartLike).ignored).toBe(true)
+    expect((output.parts[0] as TextPartLike).ignored).toBeFalsy()
     expect((output.parts[0] as TextPartLike).metadata?.translate_en).toBe("EN:안녕")
     expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("llm_only_translation")
     expect((output.parts[1] as TextPartLike).synthetic).toBe(true)
     expect((output.parts[1] as TextPartLike).text).toBe("EN:안녕")
+
+    const transformOutput = {
+      messages: [
+        {
+          info: { role: "user", sessionID: "ses_1" },
+          parts: output.parts,
+        }
+      ]
+    }
+    await hooks["experimental.chat.messages.transform"]!({} as never, transformOutput as never)
+    expect((transformOutput.messages[0].parts[0] as TextPartLike).ignored).toBe(true)
     expect((output.parts[2] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
   })
 
@@ -378,9 +401,9 @@ describe("activation", () => {
       completeOutput,
     )
 
-    expect(counted.calls).toEqual({ get: 1, messages: 1, message: 0 })
-    expect(translatorCalls).toBe(0)
-    expect((laterOutput.parts[0] as TextPartLike).text).toBe("$en later trigger")
+    expect(counted.calls).toEqual({ get: 1, messages: 1, message: 1 })
+    expect(translatorCalls).toBe(1)
+    expect((laterOutput.parts[0] as TextPartLike).text).toBe("later trigger")
     expect(completeOutput.text).toBe("assistant text")
   })
 
@@ -466,16 +489,28 @@ describe("activation", () => {
     // closes the message.
     expect(output.parts).toHaveLength(6)
     expect((output.parts[0] as TextPartLike).text).toBe("첫번째")
-    expect((output.parts[0] as TextPartLike).ignored).toBe(true)
+    expect((output.parts[0] as TextPartLike).ignored).toBeFalsy()
     expect((output.parts[1] as TextPartLike).text).toBe("EN:첫번째")
     expect((output.parts[1] as TextPartLike).synthetic).toBe(true)
     expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("llm_only_translation")
     expect((output.parts[2] as TextPartLike).type).toBe("file")
     expect((output.parts[3] as TextPartLike).text).toBe("두번째")
-    expect((output.parts[3] as TextPartLike).ignored).toBe(true)
+    expect((output.parts[3] as TextPartLike).ignored).toBeFalsy()
     expect((output.parts[4] as TextPartLike).text).toBe("EN:두번째")
     expect((output.parts[4] as TextPartLike).synthetic).toBe(true)
     expect((output.parts[4] as TextPartLike).metadata?.translate_role).toBe("llm_only_translation")
+
+    const transformOutput = {
+      messages: [
+        {
+          info: { role: "user", sessionID: "ses_1" },
+          parts: output.parts,
+        }
+      ]
+    }
+    await hooks["experimental.chat.messages.transform"]!({} as never, transformOutput as never)
+    expect((transformOutput.messages[0].parts[0] as TextPartLike).ignored).toBe(true)
+    expect((transformOutput.messages[0].parts[3] as TextPartLike).ignored).toBe(true)
     expect((output.parts[5] as TextPartLike).text).toContain("✓ Translation enabled")
     expect((output.parts[1] as TextPartLike).metadata?.translate_part_index).toBe(0)
     expect((output.parts[4] as TextPartLike).metadata?.translate_part_index).toBe(1)
