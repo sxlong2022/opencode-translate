@@ -16,7 +16,7 @@ import {
   type ResolvedTranslateOptions,
   unwrapData,
 } from "./constants"
-import { buildSystemPrompt, buildUserPrompt } from "./prompts"
+import { buildSystemPrompt, buildUserPrompt, buildBatchSystemPrompt, buildBatchUserPrompt, parseBatchSegments, unwrapEchoedTextEnvelope } from "./prompts"
 
 interface OpenCodeProviderConfig {
   baseURL?: string
@@ -95,6 +95,13 @@ interface TranslatorDependencies {
 
 interface TranslateTextInput {
   text: string
+  sourceLanguage: string
+  targetLanguage: string
+  direction: "inbound" | "outbound"
+}
+
+interface TranslateTextsInput {
+  texts: readonly string[]
   sourceLanguage: string
   targetLanguage: string
   direction: "inbound" | "outbound"
@@ -468,7 +475,7 @@ baseURL: resolvedBaseURL,
             retry ? timeoutMs : FAST_TIMEOUT_MS,
             "Translator generateText",
           )) as { text: string }
-          return result.text
+          return unwrapEchoedTextEnvelope(result.text)
         } catch (error) {
           if (isAuthMessage(error)) throw error
           if (credentials.mode === "default" && credentialResolver.isMissingCredentialError(error)) {
@@ -517,7 +524,138 @@ baseURL: resolvedBaseURL,
     return { text: translated, modelUsed: usedModel }
   }
 
+  async function translateTexts(
+    input: TranslateTextsInput
+  ): Promise<{ texts: string[]; modelUsed: string }> {
+    if (input.texts.length === 0) return { texts: [], modelUsed: options.translatorModel }
+    if (input.sourceLanguage === input.targetLanguage) return { texts: [...input.texts], modelUsed: options.translatorModel }
+
+    const startedAt = now()
+
+    async function attemptBatchTranslation(modelString: string, { retry = true } = {}): Promise<string[]> {
+      const { providerID, modelID } = parseTranslatorModel(modelString)
+      const credentials = await credentialResolver.resolve(modelString)
+      const resolvedBaseURL = await resolveBaseURL(providerID)
+      const resolvedApiKey = !credentials.apiKey ? await resolveApiKey(providerID) : undefined
+
+      const baseFetch = credentials.fetch ?? fetch
+      const robustFetch: FetchLike = async (fetchInput, init) => {
+        let lastError: unknown
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            return await baseFetch(fetchInput, {
+              ...init,
+              // @ts-ignore
+              ...(options.verbose ? { verbose: true } : {}),
+            })
+          } catch (error) {
+            lastError = error
+            const msg = String(error).toLowerCase()
+            const isNetworkError =
+              msg.includes("socket") ||
+              msg.includes("fetch") ||
+              msg.includes("network") ||
+              msg.includes("econn") ||
+              msg.includes("closed")
+            if (!isNetworkError || attempt === 3) {
+              throw error
+            }
+            if (options.verbose) {
+              await client.app.log({
+                body: {
+                  service: PLUGIN_NAME,
+                  level: "warn",
+                  message: `Fetch failed (attempt ${attempt}/3): ${msg}. Retrying...`,
+                },
+              })
+            }
+            await sleepImpl(500 * Math.pow(2, attempt - 1))
+          }
+        }
+        throw lastError
+      }
+      const factory = await loadFactory(providerID)
+      const provider = instantiateProvider(factory, providerID, {
+        ...credentials,
+        fetch: robustFetch,
+        ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
+        baseURL: resolvedBaseURL,
+      })
+      const model = instantiateModel(provider, modelID)
+
+      const modelProviderOptions =
+        modelString === options.translatorModel
+          ? (options.translatorProviderOptions ?? options.providerOptions)
+          : (options.fallbackProviderOptions ?? options.providerOptions)
+
+      const doTranslate = async () => {
+        try {
+          const result = (await withTimeout(
+            generateTextImpl({
+              model: model as never,
+              system: buildBatchSystemPrompt({
+                sourceLanguage: input.sourceLanguage,
+                targetLanguage: input.targetLanguage,
+                texts: input.texts,
+              }),
+              temperature: 0,
+              prompt: buildBatchUserPrompt({
+                texts: input.texts,
+              }),
+              maxRetries: 0,
+              ...(modelProviderOptions ? { providerOptions: modelProviderOptions as never } : {}),
+            }) as Promise<{ text: string }>,
+            retry ? timeoutMs : FAST_TIMEOUT_MS,
+            "Translator generateText (batch)",
+          )) as { text: string }
+          return parseBatchSegments(result.text, input.texts.length).map(unwrapEchoedTextEnvelope)
+        } catch (error) {
+          if (isAuthMessage(error)) throw error
+          if (credentials.mode === "default" && credentialResolver.isMissingCredentialError(error)) {
+            throw modelProviderHint(providerID, credentials.provider)
+          }
+          throw error
+        }
+      }
+
+      return retry ? withRetry(doTranslate, sleepImpl) : doTranslate()
+    }
+    let translated: string[]
+    let usedModel = options.translatorModel
+    try {
+      translated = await attemptBatchTranslation(options.translatorModel, { retry: !options.fallbackModel })
+    } catch (primaryError) {
+      if (options.fallbackModel) {
+        usedModel = options.fallbackModel
+        translated = await attemptBatchTranslation(options.fallbackModel, { retry: true })
+      } else {
+        throw primaryError
+      }
+    }
+
+    if (options.verbose) {
+      await client.app.log({
+        body: {
+          service: PLUGIN_NAME,
+          level: "info",
+          message: "translated",
+          extra: {
+            direction: input.direction,
+            chars_in: input.texts.reduce((sum, t) => sum + t.length, 0),
+            chars_out: translated.reduce((sum, t) => sum + t.length, 0),
+            ms: now() - startedAt,
+            cached: false,
+            model: usedModel,
+          },
+        },
+      })
+    }
+
+    return { texts: translated, modelUsed: usedModel }
+  }
+
   return {
     translateText,
+    translateTexts,
   }
 }

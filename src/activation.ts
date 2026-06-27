@@ -32,7 +32,12 @@ import {
 } from "./question-tool"
 import { createSyntheticPartID, createTranslator, hashText } from "./translator"
 
-const sessionStateCache = new Map<string, TranslateState | null>()
+const INACTIVE_ROOT_SESSION = Symbol("INACTIVE_ROOT_SESSION")
+const INACTIVE_CHILD_SESSION = Symbol("INACTIVE_CHILD_SESSION")
+
+type CachedSessionState = TranslateState | typeof INACTIVE_ROOT_SESSION | typeof INACTIVE_CHILD_SESSION
+
+const sessionStateCache = new Map<string, CachedSessionState>()
 const questionSnapshots = new Map<string, QuestionSnapshot>()
 const QUESTION_TOOL_ID = "question"
 
@@ -63,6 +68,12 @@ interface HookDependencies {
       targetLanguage: string
       direction: "inbound" | "outbound"
     }): Promise<{ text: string; modelUsed: string }>
+    translateTexts?(input: {
+      texts: readonly string[]
+      sourceLanguage: string
+      targetLanguage: string
+      direction: "inbound" | "outbound"
+    }): Promise<{ texts: string[]; modelUsed: string }>
   }
 }
 
@@ -191,6 +202,11 @@ function createLlmOnlyTextPart(
   }
 }
 
+function isTranslatedUserDisplayPart(part: TextPartLike): boolean {
+  if (!isTextPart(part) || part.synthetic === true) return false
+  return extractStateFromMetadata(asMetadata(part)) !== undefined
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -254,20 +270,38 @@ export function stripTriggerKeyword(text: string, keyword: string, offset: numbe
   return `${text.slice(0, lineStart)}${rewrittenLine}${text.slice(lineEnd)}`
 }
 
+function cachedStateResult(cached: CachedSessionState): ResolvedSessionState {
+  if (cached === INACTIVE_ROOT_SESSION) {
+    return {
+      sessionActive: false,
+      canActivate: true,
+      storedMessages: [],
+    }
+  }
+
+  if (cached === INACTIVE_CHILD_SESSION) {
+    return {
+      sessionActive: false,
+      canActivate: false,
+      storedMessages: [],
+    }
+  }
+
+  return {
+    sessionActive: true,
+    canActivate: false,
+    state: cached,
+    storedMessages: [],
+  }
+}
+
 async function resolveSessionState(
   client: PluginClientLike,
   directory: string | undefined,
   sessionID: string,
 ): Promise<ResolvedSessionState> {
   const cached = sessionStateCache.get(sessionID)
-  if (cached !== undefined) {
-    return {
-      sessionActive: Boolean(cached),
-      canActivate: false,
-      state: cached ?? undefined,
-      storedMessages: [],
-    }
-  }
+  if (cached !== undefined) return cachedStateResult(cached)
 
   const session = unwrapData(
     await client.session.get({
@@ -277,7 +311,7 @@ async function resolveSessionState(
     }),
   )
   if (session.parentID != null) {
-    sessionStateCache.set(sessionID, null)
+    sessionStateCache.set(sessionID, INACTIVE_CHILD_SESSION)
     return { sessionActive: false, canActivate: false, storedMessages: [] }
   }
 
@@ -289,15 +323,11 @@ async function resolveSessionState(
     }),
   )
   const state = extractStoredState(storedMessages)
-  if (state) {
-    sessionStateCache.set(sessionID, state)
-  } else if (storedMessages.length > 0) {
-    sessionStateCache.set(sessionID, null)
-  }
+  sessionStateCache.set(sessionID, state ?? INACTIVE_ROOT_SESSION)
 
   return {
     sessionActive: Boolean(state),
-    canActivate: storedMessages.length === 0,
+    canActivate: !state,
     state: state ?? undefined,
     storedMessages,
   }
@@ -330,12 +360,12 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         if (disableMatch) {
           const part = output.parts[disableMatch.partArrayIndex] as TextPartLike & { text: string }
           part.text = stripTriggerKeyword(part.text, disableMatch.keyword, disableMatch.offset)
-          sessionStateCache.set(input.sessionID, null)
+          sessionStateCache.set(input.sessionID, INACTIVE_CHILD_SESSION)
           activeState = undefined
           disabledThisTurn = true
         }
 
-        if (!activeState && !disabledThisTurn) {
+        if (!activeState && !disabledThisTurn && resolved.canActivate) {
           const match = findTriggerMatch(output.parts as TextPartLike[], options.triggerKeywords)
           if (match) {
             const part = output.parts[match.partArrayIndex] as TextPartLike & { text: string }
@@ -350,7 +380,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
             activatedThisTurn = true
             sessionStateCache.set(input.sessionID, activeState)
           } else if (resolved.canActivate) {
-            sessionStateCache.set(input.sessionID, null)
+            sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
           }
         }
 
@@ -389,7 +419,6 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
             // Hide the user's source-language text from the LLM. The TUI
             // still renders it because `ignored:true` only affects the
             // user-side LLM serializer (`message-v2.ts:773`).
-            part.ignored = true
 
             // LLM-only English twin. This is the actual prompt the model
             // sees in place of the now-`ignored` source-language part.
@@ -426,7 +455,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         // user-authored part, roll back activation so the next turn does a
         // clean retry instead of cementing broken state.
         if (activatedThisTurn && translationErrors.length > 0 && eligibleIndex === translationErrors.length) {
-          sessionStateCache.set(input.sessionID, null)
+          sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
           return
         }
 
@@ -477,12 +506,16 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         const activeState = resolved.state
         if (!activeState) return
 
-        // User parts need no in-place rewriting: the source-language text
-        // part is `ignored:true` so the LLM serializer skips it, and a
-        // synthetic English twin (created in `chat.message`) carries the
-        // actual prompt content. Only assistant parts still need their
-        // localized trailer stripped before re-entering the model.
         for (const message of output.messages as MessageWithPartsLike[]) {
+          if (message.info.role === "user") {
+            for (const part of message.parts) {
+              if (isTranslatedUserDisplayPart(part)) {
+                part.ignored = true
+              }
+            }
+            continue
+          }
+
           if (message.info.role !== "assistant") continue
           for (const part of message.parts) {
             if (!isTextPart(part)) continue
@@ -551,15 +584,27 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
 
         const original = snapshotQuestions(args)
         try {
-          await translateQuestionArgs(args, async (text) => {
-            const result = await translator.translateText({
-              text,
-              sourceLanguage: LLM_LANGUAGE,
-              targetLanguage: activeState.translate_display_lang,
-              direction: "outbound",
-            })
-            return result.text
-          })
+          const batchTranslate = async (texts: readonly string[]) => {
+            return translator.translateTexts
+              ? translator.translateTexts({
+                  texts,
+                  sourceLanguage: LLM_LANGUAGE,
+                  targetLanguage: activeState.translate_display_lang,
+                  direction: "outbound",
+                }).then((r: any) => r.texts)
+              : Promise.all(
+                  texts.map((text) =>
+                    translator.translateText({
+                      text,
+                      sourceLanguage: LLM_LANGUAGE,
+                      targetLanguage: activeState.translate_display_lang,
+                      direction: "outbound",
+                    }).then((r: any) => r.text)
+                  )
+                )
+          }
+          batchTranslate.isBatch = true
+          await translateQuestionArgs(args, batchTranslate)
         } catch (error) {
           // Translation failed: restore the originals so the dialog at least
           // renders in English instead of a half-translated mess.
@@ -580,7 +625,43 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         const snapshot = questionSnapshots.get(input.callID)
         if (!snapshot) return
         questionSnapshots.delete(input.callID)
-        restoreQuestionOutput(output as QuestionToolOutput, snapshot)
+        const resolved = await resolveSessionState(client, ctx.directory, input.sessionID)
+        const activeState = resolved.state
+        const translateCustomAnswers = activeState && activeState.translate_source_lang !== LLM_LANGUAGE
+          ? async (texts: readonly string[]) => {
+              return translator.translateTexts
+                ? translator.translateTexts({
+                    texts,
+                    sourceLanguage: activeState.translate_source_lang,
+                    targetLanguage: LLM_LANGUAGE,
+                    direction: "inbound",
+                  }).then((r: any) => r.texts)
+                : Promise.all(
+                    texts.map((text) =>
+                      translator.translateText({
+                        text,
+                        sourceLanguage: activeState.translate_source_lang,
+                        targetLanguage: LLM_LANGUAGE,
+                        direction: "inbound",
+                      }).then((r: any) => r.text)
+                    )
+                  )
+            }
+          : undefined
+
+        await restoreQuestionOutput(output as QuestionToolOutput, snapshot, {
+          ...(translateCustomAnswers ? { translateCustomAnswers } : {}),
+          onTranslationError: async (error) => {
+            if (!activeState) {
+              await logError(client, error)
+              return
+            }
+            await logError(
+              client,
+              buildInboundTranslationError(activeState.translate_source_lang, normalizeReason(error)),
+            )
+          },
+        })
       } catch (error) {
         await logError(client, error)
       }
@@ -588,7 +669,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
     "experimental.session.compacting": async (input, output) => {
       try {
         const state = sessionStateCache.get(input.sessionID)
-        if (!state) return
+        if (!state || typeof state === "symbol") return
 
         const modelLabel = options.translatorModel
         output.context.push(

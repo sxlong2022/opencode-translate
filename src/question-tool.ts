@@ -1,3 +1,5 @@
+import { unwrapEchoedTextEnvelope } from "./prompts"
+
 // Translation layer for OpenCode's built-in `question` tool.
 //
 // Flow:
@@ -67,76 +69,182 @@ export function isQuestionArgs(value: unknown): value is QuestionArgs {
   return true
 }
 
-async function assignTranslation(
-  container: Record<string, string>,
-  key: string,
-  translate: (text: string) => Promise<string>,
-): Promise<void> {
-  const original = container[key]
-  if (!original || original.length === 0) return
-  const translated = await translate(original)
-  container[key] = translated
+export interface RestoreQuestionOutputOptions {
+  translateCustomAnswers?: (texts: readonly string[]) => Promise<readonly string[]>
+  translateCustomAnswer?: (text: string) => Promise<string>
+  onTranslationError?: (error: unknown) => Promise<void> | void
 }
 
-// Translate every display-facing string in `args` in parallel. Returns the
-// snapshot of the translated form so the caller can pair it with the
-// pre-translation snapshot taken with `snapshotQuestions`.
+interface TranslatableField {
+  text: string
+  set(value: string): void
+}
+
+interface CustomAnswerSlot {
+  questionIndex: number
+  answerIndex: number
+  text: string
+}
+
 export async function translateQuestionArgs(
   args: QuestionArgs,
-  translate: (text: string) => Promise<string>,
+  translate: (((text: string) => Promise<string>) | ((texts: readonly string[]) => Promise<readonly string[]>)) & { isBatch?: boolean },
 ): Promise<void> {
-  const jobs: Promise<void>[] = []
+  const translatedQuestions = snapshotQuestions(args)
+  const fields: TranslatableField[] = []
 
-  for (const q of args.questions) {
-    jobs.push(assignTranslation(q as unknown as Record<string, string>, "question", translate))
-    jobs.push(assignTranslation(q as unknown as Record<string, string>, "header", translate))
+  function addField(text: string, set: (value: string) => void) {
+    if (text.length === 0) return
+    fields.push({ text, set })
+  }
+
+  for (const q of translatedQuestions) {
+    addField(q.question, (value) => {
+      q.question = value
+    })
+    addField(q.header, (value) => {
+      q.header = value
+    })
     for (const option of q.options) {
-      jobs.push(assignTranslation(option as unknown as Record<string, string>, "label", translate))
-      jobs.push(assignTranslation(option as unknown as Record<string, string>, "description", translate))
+      addField(option.label, (value) => {
+        option.label = value
+      })
+      addField(option.description, (value) => {
+        option.description = value
+      })
     }
   }
 
-  await Promise.all(jobs)
+  if (fields.length === 0) return
+
+  if (translate.isBatch) {
+    const batchTranslate = translate as unknown as (texts: readonly string[]) => Promise<readonly string[]>
+    const translated = await batchTranslate(fields.map((field) => field.text))
+    if (translated.length !== fields.length) {
+      throw new Error(`Question translator returned ${translated.length} translations for ${fields.length} fields`)
+    }
+    for (const [index, field] of fields.entries()) {
+      field.set(unwrapEchoedTextEnvelope(translated[index]))
+    }
+  } else {
+    const singleTranslate = translate as (text: string) => Promise<string>
+    const jobs = fields.map(async (field) => {
+      const val = await singleTranslate(field.text)
+      field.set(unwrapEchoedTextEnvelope(val))
+    })
+    await Promise.all(jobs)
+  }
+
+  args.questions.splice(0, args.questions.length, ...translatedQuestions)
 }
 
 // Given the user-selected labels (`answers`), find the matching translated
 // option and return its original English label. If no match (e.g. a custom
 // free-text answer), return the label verbatim so the LLM still sees what
 // the user actually typed.
-function restoreLabel(
+function restoreOptionLabel(
   selectedLabel: string,
   translatedOptions: readonly OptionRecord[],
   originalOptions: readonly OptionRecord[],
-): string {
+): string | undefined {
   const idx = translatedOptions.findIndex((option) => option.label === selectedLabel)
-  if (idx < 0) return selectedLabel
+  if (idx < 0) return undefined
   return originalOptions[idx]?.label ?? selectedLabel
 }
 
-// Reconstruct the exact output string the question tool would have produced
-// if it had been called with the original English args. Mirrors the format
-// in `packages/opencode/src/tool/question.ts` (as of opencode 1.14.x).
-export function buildRestoredOutput(
+async function restoreQuestionAnswers(
   original: readonly TextRecord[],
   translated: readonly TextRecord[],
   answers: readonly (readonly string[])[],
-): string {
+  options: RestoreQuestionOutputOptions = {},
+): Promise<string[][]> {
+  const translateCustomAnswers = options.translateCustomAnswers
+  const translateCustomAnswer = options.translateCustomAnswer
+  const customSlots: CustomAnswerSlot[] = []
+  const restored = original.map((q, questionIndex) => {
+    const selected = answers[questionIndex] ?? []
+    const translatedOptions = translated[questionIndex]?.options ?? []
+    const originalOptions = q.options
+
+    return selected.map((label, answerIndex) => {
+      const restoredLabel = restoreOptionLabel(label, translatedOptions, originalOptions)
+      if (restoredLabel !== undefined) return restoredLabel
+      if (label.trim().length === 0) return label
+      if (!translateCustomAnswers && !translateCustomAnswer) return label
+
+      customSlots.push({ questionIndex, answerIndex, text: label })
+      return label
+    })
+  })
+
+  if (customSlots.length === 0) return restored
+
+  if (translateCustomAnswers) {
+    try {
+      const translatedCustomAnswers = await translateCustomAnswers(customSlots.map((slot) => slot.text))
+      if (translatedCustomAnswers.length !== customSlots.length) {
+        throw new Error(
+          `Question custom-answer translator returned ${translatedCustomAnswers.length} translations for ${customSlots.length} answers`,
+        )
+      }
+      for (const [index, slot] of customSlots.entries()) {
+        restored[slot.questionIndex][slot.answerIndex] = unwrapEchoedTextEnvelope(translatedCustomAnswers[index])
+      }
+    } catch (error) {
+      await options.onTranslationError?.(error)
+    }
+  } else if (translateCustomAnswer) {
+    const jobs = customSlots.map(async (slot) => {
+      try {
+        const val = await translateCustomAnswer(slot.text)
+        restored[slot.questionIndex][slot.answerIndex] = unwrapEchoedTextEnvelope(val)
+      } catch (error) {
+        await options.onTranslationError?.(error)
+      }
+    })
+    await Promise.all(jobs)
+  }
+
+  return restored
+}
+
+function formatRestoredOutput(original: readonly TextRecord[], answers: readonly (readonly string[])[]): string {
   const formatted = original
     .map((q, i) => {
       const selected = answers[i] ?? []
-      const translatedOptions = translated[i]?.options ?? []
-      const originalOptions = q.options
-      const restored = selected.map((label) => restoreLabel(label, translatedOptions, originalOptions))
-      const rendered = restored.length > 0 ? restored.join(", ") : "Unanswered"
+      const rendered = selected.length > 0 ? selected.join(", ") : "Unanswered"
       return `"${q.question}"="${rendered}"`
     })
     .join(", ")
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 
-export function restoreQuestionOutput(output: QuestionToolOutput, snapshot: QuestionSnapshot): void {
+export async function restoreQuestionOutput(
+  output: QuestionToolOutput,
+  snapshot: QuestionSnapshot,
+  options?: RestoreQuestionOutputOptions,
+): Promise<void> {
   if (typeof output.output !== "string") return
   const answersRaw = (output.metadata as { answers?: readonly (readonly string[])[] } | undefined)?.answers
   const answers = Array.isArray(answersRaw) ? answersRaw : []
-  output.output = buildRestoredOutput(snapshot.original, snapshot.translated, answers)
+  const restored = await restoreQuestionAnswers(snapshot.original, snapshot.translated, answers, options)
+  output.output = formatRestoredOutput(snapshot.original, restored)
+}
+
+export function buildRestoredOutput(
+  original: readonly TextRecord[],
+  translated: readonly TextRecord[],
+  answers: readonly (readonly string[])[],
+): string {
+  const restored = original.map((q, questionIndex) => {
+    const selected = answers[questionIndex] ?? []
+    const translatedOptions = translated[questionIndex]?.options ?? []
+    const originalOptions = q.options
+
+    return selected.map((label) => {
+      const restoredLabel = restoreOptionLabel(label, translatedOptions, originalOptions)
+      return restoredLabel ?? label
+    })
+  })
+  return formatRestoredOutput(original, restored)
 }

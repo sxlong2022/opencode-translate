@@ -85,7 +85,7 @@ describe("question-tool helpers", () => {
   test("translateQuestionArgs translates every display-facing field", async () => {
     const args: QuestionArgs = JSON.parse(JSON.stringify(sampleArgs))
     const seen: string[] = []
-    await translateQuestionArgs(args, async (text) => {
+    await translateQuestionArgs(args, async (text: string) => {
       seen.push(text)
       return `[ko]${text}`
     })
