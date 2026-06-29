@@ -110,8 +110,13 @@ interface TranslateTextsInput {
 // Hard timeout for a single generateText call. Without this, a stalled
 // provider request can block the chat.message hook indefinitely.
 const DEFAULT_TRANSLATE_TIMEOUT_MS = 60_000
-// Fast timeout for primary model when fallback is available — fail quickly on VPN disconnection
-const FAST_TIMEOUT_MS = 10_000
+// Wall-clock budget for an entire translation (primary + fallback combined).
+// When a fallbackModel is configured, this is the total time allowed before
+// giving up and returning the original text.
+const TOTAL_BUDGET_MS = 15_000
+// Per-call cap for the primary model when fallback is available — fail fast
+// so the fallback gets a chance within the remaining budget.
+const PRIMARY_TIMEOUT_MS = 10_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -395,7 +400,7 @@ export function createTranslator(
 
     const startedAt = now()
 
-    async function attemptTranslation(modelString: string, { retry = true } = {}): Promise<string> {
+    async function attemptTranslation(modelString: string, { retry = true, deadline = Infinity } = {}): Promise<string> {
       const { providerID, modelID } = parseTranslatorModel(modelString)
 const credentials = await credentialResolver.resolve(modelString)
 const resolvedBaseURL = await resolveBaseURL(providerID)
@@ -472,7 +477,7 @@ baseURL: resolvedBaseURL,
               maxRetries: 0,
               ...(modelProviderOptions ? { providerOptions: modelProviderOptions as never } : {}),
             }) as Promise<{ text: string }>,
-            retry ? timeoutMs : FAST_TIMEOUT_MS,
+            retry ? Math.min(timeoutMs, Math.max(0, deadline - now())) : Math.min(PRIMARY_TIMEOUT_MS, Math.max(0, deadline - now())),
             "Translator generateText",
           )) as { text: string }
           return unwrapEchoedTextEnvelope(result.text)
@@ -485,19 +490,35 @@ baseURL: resolvedBaseURL,
         }
       }
 
-      return retry ? withRetry(doTranslate, sleepImpl) : doTranslate()
+      if (retry) {
+        const remaining = deadline - now()
+        if (remaining <= 0) throw new Error("Translation budget exhausted before retry")
+        return withRetry(doTranslate, sleepImpl)
+      }
+      return doTranslate()
     }
 
+    const deadline = options.fallbackModel ? now() + TOTAL_BUDGET_MS : Infinity
     let translated: string
     let usedModel = options.translatorModel
     try {
-      // Fast-fail on primary only when fallback is available (VPN disconnection won't resolve by retrying the same endpoint)
-      translated = await attemptTranslation(options.translatorModel, { retry: !options.fallbackModel })
+      // Primary: fast-fail when fallback is available, so fallback gets remaining budget
+      translated = await attemptTranslation(options.translatorModel, { retry: !options.fallbackModel, deadline })
     } catch (primaryError) {
       if (options.fallbackModel) {
+        const remaining = deadline - now()
+        if (remaining <= 500) {
+          // Not enough time for a meaningful fallback attempt — return original text
+          return { text: input.text, modelUsed: "passthrough" }
+        }
         usedModel = options.fallbackModel
-        // Fallback: normal retry — different network path, transient errors may resolve
-        translated = await attemptTranslation(options.fallbackModel, { retry: true })
+        try {
+          // Fallback: single attempt within remaining budget (total deadline is the safety net)
+          translated = await attemptTranslation(options.fallbackModel, { retry: false, deadline })
+        } catch {
+          // Both models failed within budget — return original text
+          return { text: input.text, modelUsed: "passthrough" }
+        }
       } else {
         throw primaryError
       }
@@ -532,7 +553,7 @@ baseURL: resolvedBaseURL,
 
     const startedAt = now()
 
-    async function attemptBatchTranslation(modelString: string, { retry = true } = {}): Promise<string[]> {
+    async function attemptBatchTranslation(modelString: string, { retry = true, deadline = Infinity } = {}): Promise<string[]> {
       const { providerID, modelID } = parseTranslatorModel(modelString)
       const credentials = await credentialResolver.resolve(modelString)
       const resolvedBaseURL = await resolveBaseURL(providerID)
@@ -605,7 +626,7 @@ baseURL: resolvedBaseURL,
               maxRetries: 0,
               ...(modelProviderOptions ? { providerOptions: modelProviderOptions as never } : {}),
             }) as Promise<{ text: string }>,
-            retry ? timeoutMs : FAST_TIMEOUT_MS,
+            retry ? Math.min(timeoutMs, Math.max(0, deadline - now())) : Math.min(PRIMARY_TIMEOUT_MS, Math.max(0, deadline - now())),
             "Translator generateText (batch)",
           )) as { text: string }
           return parseBatchSegments(result.text, input.texts.length).map(unwrapEchoedTextEnvelope)
@@ -618,16 +639,30 @@ baseURL: resolvedBaseURL,
         }
       }
 
-      return retry ? withRetry(doTranslate, sleepImpl) : doTranslate()
+      if (retry) {
+        const remaining = deadline - now()
+        if (remaining <= 0) throw new Error("Translation budget exhausted before retry")
+        return withRetry(doTranslate, sleepImpl)
+      }
+      return doTranslate()
     }
+    const deadline = options.fallbackModel ? now() + TOTAL_BUDGET_MS : Infinity
     let translated: string[]
     let usedModel = options.translatorModel
     try {
-      translated = await attemptBatchTranslation(options.translatorModel, { retry: !options.fallbackModel })
+      translated = await attemptBatchTranslation(options.translatorModel, { retry: !options.fallbackModel, deadline })
     } catch (primaryError) {
       if (options.fallbackModel) {
+        const remaining = deadline - now()
+        if (remaining <= 500) {
+          return { texts: [...input.texts], modelUsed: "passthrough" }
+        }
         usedModel = options.fallbackModel
-        translated = await attemptBatchTranslation(options.fallbackModel, { retry: true })
+        try {
+          translated = await attemptBatchTranslation(options.fallbackModel, { retry: false, deadline })
+        } catch {
+          return { texts: [...input.texts], modelUsed: "passthrough" }
+        }
       } else {
         throw primaryError
       }

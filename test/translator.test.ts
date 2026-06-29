@@ -506,4 +506,147 @@ fallbackCapturedOptions = args.providerOptions
     expect(fallbackResult.modelUsed).toBe("cloudflare/llama-instruct")
     expect(fallbackCapturedOptions).toEqual({ cloudflare: { fallback_only: true } })
   })
+
+  // ---------------------------------------------------------------------------
+  // Total budget tests
+  // ---------------------------------------------------------------------------
+
+  function makeCredentialResolver(providerID = "anthropic") {
+    return {
+      resolve: async (model: string) => ({
+        providerID: model.split("/")[0],
+        apiKey: "test-key",
+        mode: "apiKey" as const,
+      }),
+      isMissingCredentialError: () => false,
+      authUnavailable: () => new Error("unused"),
+      envFallback: "API_KEY",
+    }
+  }
+
+  test("primary timeout triggers fallback which succeeds within budget", async () => {
+    let calls = 0
+    // Use a fixed now() so deadline arithmetic is deterministic.
+    // deadline = 0 + 15_000 = 15_000.
+    // After primary throws, remaining = 15_000 - 1 = 14_999 > 500 → fallback runs.
+    let timeNow = 0
+    const translator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "anthropic/claude-haiku-4-5",
+        fallbackModel: "openai/gpt-4o-mini",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+      },
+      {
+        credentialResolver: makeCredentialResolver(),
+        generateTextImpl: async () => {
+          calls += 1
+          if (calls === 1) {
+            timeNow = 1 // advance by 1ms — well within budget
+            throw new Error("Translator generateText timed out after 10000ms")
+          }
+          return { text: "fallback-result" } as never
+        },
+        sleep: async () => undefined,
+        now: () => timeNow,
+      },
+    )
+
+    const result = await translator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    expect(result.text).toBe("fallback-result")
+    expect(result.modelUsed).toBe("openai/gpt-4o-mini")
+    expect(calls).toBe(2)
+  })
+
+  test("both models fail within budget — returns original text without throwing", async () => {
+    const translator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "anthropic/claude-haiku-4-5",
+        fallbackModel: "openai/gpt-4o-mini",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+      },
+      {
+        credentialResolver: makeCredentialResolver(),
+        generateTextImpl: async () => {
+          throw new Error("network error")
+        },
+        sleep: async () => undefined,
+        now: (() => {
+          let t = 0
+          return () => (t += 10)
+        })(),
+      },
+    )
+
+    const result = await translator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    // Must NOT throw; returns original text with passthrough sentinel
+    expect(result.text).toBe("안녕")
+    expect(result.modelUsed).toBe("passthrough")
+  })
+
+  test("fallback is skipped when remaining budget is ≤ 500ms — returns original text", async () => {
+    let calls = 0
+    let timeValue = 0
+    const translator = createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "anthropic/claude-haiku-4-5",
+        fallbackModel: "openai/gpt-4o-mini",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+      },
+      {
+        credentialResolver: makeCredentialResolver(),
+        generateTextImpl: async () => {
+          calls += 1
+          throw new Error("primary failed")
+        },
+        sleep: async () => undefined,
+        now: () => {
+          // Start at 0; after primary fails jump past total budget so remaining <= 500ms
+          return calls >= 1 ? 15_000 : timeValue++
+        },
+      },
+    )
+
+    const result = await translator.translateText({
+      text: "안녕",
+      sourceLanguage: "ko",
+      targetLanguage: "en",
+      direction: "inbound",
+    })
+
+    // Fallback should be skipped; original text returned
+    expect(result.text).toBe("안녕")
+    expect(result.modelUsed).toBe("passthrough")
+    // Only primary was called (1 call), fallback never attempted
+    expect(calls).toBe(1)
+  })
 })
