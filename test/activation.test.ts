@@ -665,4 +665,51 @@ describe("activation", () => {
     ])
     expect(result2).toEqual(state)
   })
+
+  test("translation can be disabled and then reactivated in the same session", async () => {
+    let calls = 0
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko" },
+      {
+        translator: {
+          translateText: async ({ text }) => {
+            calls += 1
+            return { text: `EN:${text}`, modelUsed: "test/model" }
+          },
+        },
+      },
+    )
+
+    // 1. Activate translation with $en
+    const output1 = {
+      message: { id: "msg_1" },
+      parts: [textPart("p1", "$en 첫번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output1 as never)
+    expect(calls).toBe(1)
+    expect(output1.parts).toHaveLength(3) // original, twin, banner
+
+    // 2. Disable translation with $dis
+    const output2 = {
+      message: { id: "msg_2" },
+      parts: [textPart("p2", "$dis 두번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output2 as never)
+    expect(output2.parts).toHaveLength(2) // original, disabled banner
+    expect(output2.parts[1].text).toBe("✗ Translation disabled")
+
+    // 3. Reactivate translation with $en
+    const output3 = {
+      message: { id: "msg_3" },
+      parts: [textPart("p3", "$en 세번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output3 as never)
+    expect(calls).toBe(2)
+    expect(output3.parts).toHaveLength(3) // original, twin, banner
+    expect(output3.parts[1].text).toBe("EN:세번째")
+  })
 })

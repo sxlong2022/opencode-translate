@@ -360,7 +360,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         if (disableMatch) {
           const part = output.parts[disableMatch.partArrayIndex] as TextPartLike & { text: string }
           part.text = stripTriggerKeyword(part.text, disableMatch.keyword, disableMatch.offset)
-          sessionStateCache.set(input.sessionID, INACTIVE_CHILD_SESSION)
+          sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
           activeState = undefined
           disabledThisTurn = true
         }
