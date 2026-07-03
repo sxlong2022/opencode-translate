@@ -337,6 +337,23 @@ export function createTranslator(
   options: ResolvedTranslateOptions,
   deps: TranslatorDependencies = {},
 ) {
+  // Bypasses proxy for Gitee AI (fallback) domains
+  const bypassHosts = ["ai.gitee.com", "gitee.com"];
+  for (const envKey of ["NO_PROXY", "no_proxy"]) {
+    const current = process.env[envKey];
+    if (current) {
+      const existing = current.split(",").map((d) => d.trim()).filter(Boolean);
+      for (const host of bypassHosts) {
+        if (!existing.includes(host)) {
+          existing.push(host);
+        }
+      }
+      process.env[envKey] = existing.join(",");
+    } else {
+      process.env[envKey] = bypassHosts.join(",");
+    }
+  }
+
   const sleepImpl = deps.sleep ?? ((ms: number) => sleep(ms))
   const now = deps.now ?? (() => Date.now())
   const generateTextImpl = deps.generateTextImpl ?? generateText
