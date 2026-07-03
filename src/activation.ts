@@ -407,7 +407,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               direction: "inbound",
             })
             const english = translationResult.text
-            if (options.fallbackModel && translationResult.modelUsed !== options.translatorModel) {
+            if (options.fallbackModel && translationResult.modelUsed === options.fallbackModel) {
               fallbackUsedModel = translationResult.modelUsed
             }
 
