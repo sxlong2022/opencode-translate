@@ -649,4 +649,34 @@ fallbackCapturedOptions = args.providerOptions
     // Only primary was called (1 call), fallback never attempted
     expect(calls).toBe(1)
   })
+
+  test("Gitee AI domains are automatically added to NO_PROXY/no_proxy", () => {
+    const origNoProxy = process.env.NO_PROXY;
+    const origNoProxyLower = process.env.no_proxy;
+
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+
+    createTranslator(
+      fakeClient([]),
+      {
+        translatorModel: "cloudflare-ob/@cf/google/gemma-4-26b-a4b-it",
+        fallbackModel: "gitee/internlm3-8b-instruct",
+        triggerKeywords: ["$en"],
+        sourceLanguage: "ko",
+        displayLanguage: "ko",
+        verbose: false,
+        disableKeywords: ["$dis"],
+        translateResponses: false,
+      }
+    );
+
+    expect(process.env.NO_PROXY!).toContain("ai.gitee.com");
+    expect(process.env.NO_PROXY!).toContain("gitee.com");
+    expect(process.env.no_proxy!).toContain("ai.gitee.com");
+    expect(process.env.no_proxy!).toContain("gitee.com");
+
+    if (origNoProxy !== undefined) process.env.NO_PROXY = origNoProxy;
+    if (origNoProxyLower !== undefined) process.env.no_proxy = origNoProxyLower;
+  })
 })
