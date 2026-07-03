@@ -284,7 +284,17 @@ export function isTextPart(part: TextPartLike): part is TextPartLike & { text: s
 }
 
 export function isUserAuthoredTextPart(part: TextPartLike): part is TextPartLike & { text: string } {
-  return isTextPart(part) && part.synthetic !== true && part.ignored !== true
+return isTextPart(part) && part.synthetic !== true && part.ignored !== true
+}
+
+const ASCII_PRINTABLE_RE = /^[\x20-\x7e]+$/
+
+export function isAsciiOnlyText(part: TextPartLike & { text: string }): boolean {
+  const trimmed = part.text.trim()
+  if (trimmed.length === 0) return true
+  // Must be entirely printable ASCII (no Chinese, Japanese, Korean chars).
+  // This lets simple English like "ok", "continue", "y" pass through without trigger.
+  return ASCII_PRINTABLE_RE.test(trimmed)
 }
 
 export function parseTranslatorModel(model: string): { providerID: string; modelID: string } {

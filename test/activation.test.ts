@@ -711,8 +711,11 @@ describe("activation", () => {
     expect(calls).toBe(2)
     expect(output3.parts).toHaveLength(3) // original, twin, banner
     expect(output3.parts[1].text).toBe("EN:세번째")
+    expect(output3.parts[1].text).toBe("EN:세번째")
   })
-})
+
+
+
 
   test("passthrough result does NOT show fallback banner", async () => {
     const hooks = createHooks(
@@ -747,3 +750,51 @@ describe("activation", () => {
     )
     expect(fallbackBanner).toBeUndefined()
   })
+
+  test("ASCII-only English inputs are not translated", async () => {
+    let calls = 0
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "zh", displayLanguage: "zh" },
+      {
+        translator: {
+          translateText: async ({ text }) => {
+            calls += 1
+            return { text: `EN:${text}`, modelUsed: "test/model" }
+          },
+        },
+      },
+    )
+
+    // 1. Pure ASCII input ("ok") should NOT be translated
+    const output1 = {
+      message: { id: "msg_1" },
+      parts: [textPart("p1", "ok")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_ascii" }, output1 as never)
+    expect(calls).toBe(0)
+    expect(output1.parts).toHaveLength(1) // no LLM-only twin added
+
+    // 2. Chinese input should be translated (needs trigger keyword to activate first)
+    const output2 = {
+      message: { id: "msg_2" },
+      parts: [textPart("p2", "$en 你好")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_ascii2" }, output2 as never)
+    expect(calls).toBe(1)
+    expect(output2.parts).toHaveLength(3) // original + LLM-only twin + activation banner
+
+    // 3. Pure ASCII input in an already-active session should NOT be translated
+    const output3 = {
+      message: { id: "msg_3" },
+      parts: [textPart("p3", "continue")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_ascii2" }, output3 as never)
+    expect(calls).toBe(1) // still 1, "continue" was skipped
+    expect(output3.parts).toHaveLength(1) // no LLM-only twin
+  })
+
+})
