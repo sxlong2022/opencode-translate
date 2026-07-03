@@ -713,3 +713,37 @@ describe("activation", () => {
     expect(output3.parts[1].text).toBe("EN:세번째")
   })
 })
+
+  test("passthrough result does NOT show fallback banner", async () => {
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko", fallbackModel: "openai/gpt-4o-mini" },
+      {
+        translator: {
+          translateText: async () => ({
+            // Simulate both models failing — translator returns passthrough
+            text: "안녕",
+            modelUsed: "passthrough",
+          }),
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_1" },
+      parts: [textPart("p1", "$en 안녕")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_passthrough" }, output as never)
+
+    // Should have: original + LLM-only twin + activation banner (no fallback banner)
+    expect(output.parts).toHaveLength(3)
+    expect(output.parts[2].text).toContain("Translation enabled")
+    // Crucially: no fallback banner
+    const fallbackBanner = output.parts.find((p) =>
+      typeof p.text === "string" && p.text.includes("Translation fallback")
+    )
+    expect(fallbackBanner).toBeUndefined()
+  })
