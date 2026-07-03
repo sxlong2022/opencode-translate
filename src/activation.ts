@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto"
 import type { Hooks, PluginInput, PluginOptions } from "@opencode-ai/plugin"
 import {
   buildInboundTranslationError,
+  isAsciiOnlyText,
   isTextPart,
   isTranslateStateRecord,
   isUserAuthoredTextPart,
@@ -365,8 +366,9 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           disabledThisTurn = true
         }
 
+let match: TriggerMatch | undefined
         if (!activeState && !disabledThisTurn && resolved.canActivate) {
-          const match = findTriggerMatch(output.parts as TextPartLike[], options.triggerKeywords)
+          match = findTriggerMatch(output.parts as TextPartLike[], options.triggerKeywords)
           if (match) {
             const part = output.parts[match.partArrayIndex] as TextPartLike & { text: string }
             const originalText = part.text
@@ -386,11 +388,21 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
 
         if (!activeState && !disabledThisTurn) return
 
+        // Track which parts originally contained a trigger keyword before stripping.
+        // These parts should never be skipped by the ASCII-only bypass.
+        const triggerKeywordPartIndices = new Set<number>()
+        if (match) {
+          triggerKeywordPartIndices.add(match.partArrayIndex)
+        }
+
         const nextParts: TextPartLike[] = []
+        let partArrayIndex = -1
         let eligibleIndex = 0
+
         const translationErrors: { part: TextPartLike; error: unknown }[] = []
         let fallbackUsedModel: string | undefined
         for (const part of output.parts as TextPartLike[]) {
+          partArrayIndex += 1
           nextParts.push(part)
           if (!activeState) continue
           if (!isUserAuthoredTextPart(part)) continue
@@ -398,6 +410,13 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           const currentEligibleIndex = eligibleIndex
           eligibleIndex += 1
           if (part.text.trim().length === 0) continue
+          // Skip translation for ASCII-only English inputs (e.g. "ok", "continue", "y").
+          // They don't benefit from Chinese→English translation and would only burn latency/budget.
+          // But if the part originally contained a trigger keyword (e.g. "$en ok"), the user
+          // explicitly wants translation — don't skip it.
+          if (isAsciiOnlyText(part) && !triggerKeywordPartIndices.has(partArrayIndex)) continue
+
+
 
           try {
             const translationResult = await translator.translateText({
