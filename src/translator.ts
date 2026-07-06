@@ -109,14 +109,14 @@ interface TranslateTextsInput {
 
 // Hard timeout for a single generateText call. Without this, a stalled
 // provider request can block the chat.message hook indefinitely.
-const DEFAULT_TRANSLATE_TIMEOUT_MS = 60_000
+const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 // Wall-clock budget for an entire translation (primary + fallback combined).
 // When a fallbackModel is configured, this is the total time allowed before
 // giving up and returning the original text.
-const TOTAL_BUDGET_MS = 15_000
+const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-const PRIMARY_TIMEOUT_MS = 10_000
+const PRIMARY_TIMEOUT_MS = 5_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
