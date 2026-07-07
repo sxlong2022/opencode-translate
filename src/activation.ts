@@ -395,79 +395,102 @@ let match: TriggerMatch | undefined
           triggerKeywordPartIndices.add(match.partArrayIndex)
         }
 
-        const nextParts: TextPartLike[] = []
+        // Step 1: Collect eligible parts that need translation
+        const eligibleParts: Array<{ part: TextPartLike; currentEligibleIndex: number }> = []
         let partArrayIndex = -1
         let eligibleIndex = 0
 
-        const translationErrors: { part: TextPartLike; error: unknown }[] = []
-        let fallbackUsedModel: string | undefined
         for (const part of output.parts as TextPartLike[]) {
           partArrayIndex += 1
-          nextParts.push(part)
           if (!activeState) continue
           if (!isUserAuthoredTextPart(part)) continue
-
-          const currentEligibleIndex = eligibleIndex
-          eligibleIndex += 1
           if (part.text.trim().length === 0) continue
-          // Skip translation for ASCII-only English inputs (e.g. "ok", "continue", "y").
-          // They don't benefit from Chinese→English translation and would only burn latency/budget.
-          // But if the part originally contained a trigger keyword (e.g. "$en ok"), the user
-          // explicitly wants translation — don't skip it.
           if (isAsciiOnlyText(part) && !triggerKeywordPartIndices.has(partArrayIndex)) continue
 
+          eligibleParts.push({ part, currentEligibleIndex: eligibleIndex })
+          eligibleIndex += 1
+        }
 
+        // Step 2: Translate all eligible parts concurrently
+        const translationResults: Array<{
+          part: TextPartLike
+          success: boolean
+          text?: string
+          modelUsed?: string
+          error?: unknown
+        }> = await Promise.all(
+          eligibleParts.map(async ({ part }) => {
+            try {
+              const result = await translator.translateText({
+                text: part.text ?? "",
+                sourceLanguage: activeState!.translate_source_lang,
+                targetLanguage: LLM_LANGUAGE,
+                direction: "inbound",
+              })
+              return { part, success: true, text: result.text, modelUsed: result.modelUsed }
+            } catch (error) {
+              return { part, success: false, error }
+            }
+          })
+        )
 
-          try {
-            const translationResult = await translator.translateText({
-              text: part.text,
-              sourceLanguage: activeState.translate_source_lang,
-              targetLanguage: LLM_LANGUAGE,
-              direction: "inbound",
-            })
-            const english = translationResult.text
-            if (options.fallbackModel && translationResult.modelUsed === options.fallbackModel) {
-              fallbackUsedModel = translationResult.modelUsed
+        // Step 3: Reassemble nextParts with translation results in original order
+        const nextParts: TextPartLike[] = []
+        let fallbackUsedModel: string | undefined
+        const translationErrors: { part: TextPartLike; error: unknown }[] = []
+
+        for (const part of output.parts as TextPartLike[]) {
+          nextParts.push(part)
+
+          const eligibleInfo = eligibleParts.find((e) => e.part === part)
+          if (!eligibleInfo) continue
+
+          const result = translationResults.find((r) => r.part === part)!
+
+          if (result.success) {
+            const english = result.text!
+            if (options.fallbackModel && result.modelUsed === options.fallbackModel) {
+              fallbackUsedModel = result.modelUsed
             }
 
-            const sourceHash = hashText(part.text)
+            const sourceHash = hashText(part.text ?? "")
             part.metadata = {
               ...(part.metadata ?? {}),
-              ...mergeTranslatedMetadata(activeState, part, english),
+              ...mergeTranslatedMetadata(activeState!, part, english),
             }
-            // Hide the user's source-language text from the LLM. The TUI
-            // still renders it because `ignored:true` only affects the
-            // user-side LLM serializer (`message-v2.ts:773`).
 
-            // LLM-only English twin. This is the actual prompt the model
-            // sees in place of the now-`ignored` source-language part.
             nextParts.push(
               createLlmOnlyTextPart(part.sessionID, part.messageID, english, {
                 translate_role: "llm_only_translation",
-                translate_nonce: activeState.translate_nonce,
+                translate_nonce: activeState!.translate_nonce,
                 translate_source_hash: sourceHash,
-                translate_part_index: currentEligibleIndex,
+                translate_part_index: eligibleInfo.currentEligibleIndex,
               }),
             )
-          } catch (error) {
-            // Fall back to sending the original text to the LLM so the user
-            // still gets a response. Surface the error as a synthetic part.
-            translationErrors.push({ part, error })
-            const wrapped = buildInboundTranslationError(activeState.translate_source_lang, normalizeReason(error))
-            await logError(client, wrapped)
+          } else {
+            translationErrors.push({ part, error: result.error! })
             nextParts.push(
               createSyntheticTextPart(
                 part.sessionID,
                 part.messageID,
-                `⚠️ Translation failed: ${normalizeReason(error)}. Original text will be sent to the model.`,
+                `⚠️ Translation failed: ${normalizeReason(result.error!)}. Original text will be sent to the model.`,
                 {
                   translate_role: "translation_failure",
-                  translate_nonce: activeState.translate_nonce,
-                  translate_part_index: currentEligibleIndex,
+                  translate_nonce: activeState!.translate_nonce,
+                  translate_part_index: eligibleInfo.currentEligibleIndex,
                 },
               ),
             )
           }
+        }
+
+        // Step 4: Log errors after all translations complete
+        if (translationErrors.length > 0 && activeState) {
+          await Promise.all(
+            translationErrors.map(({ error }) =>
+              logError(client, buildInboundTranslationError(activeState.translate_source_lang, normalizeReason(error)))
+            )
+          )
         }
 
         // If we activated this turn but translation failed for every
