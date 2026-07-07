@@ -47,19 +47,71 @@ function resolveEnvVar(value: string): string {
   return value
 }
 
-async function readOpenCodeConfig(): Promise<OpenCodeConfig | undefined> {
-  // Try multiple locations for opencode.json
-  const configPaths = [
-    path.join(homedir(), ".config", "opencode", "opencode.json"),
-    path.join(homedir(), ".opencode", "opencode.json"),
-  ]
+// Robust JSONC parser: strips comments and trailing commas safely inside strings.
+function stripJsoncComments(content: string): string {
+  const result: string[] = []
+  let i = 0
+  while (i < content.length) {
+    const ch = content[i]
+    if (ch === '"' || ch === "'") {
+      const quote = ch
+      result.push(ch)
+      i++
+      while (i < content.length) {
+        const c = content[i]
+        result.push(c)
+        if (c === '\\') {
+          i++
+          if (i < content.length) result.push(content[i])
+        } else if (c === quote) {
+          break
+        }
+        i++
+      }
+    } else if (ch === '/' && content[i + 1] === '*') {
+      i += 2
+      while (i < content.length && !(content[i] === '*' && content[i + 1] === '/')) {
+        i++
+      }
+      if (i < content.length) i += 2
+    } else if (ch === '/' && content[i + 1] === '/') {
+      while (i < content.length && content[i] !== '\n') i++
+    } else {
+      result.push(ch)
+      i++
+    }
+  }
+  return result.join('')
+}
 
-  for (const configPath of configPaths) {
-    try {
-      const content = await readFile(configPath, "utf-8")
-      return JSON.parse(content) as OpenCodeConfig
-    } catch {
-      // File doesn't exist or invalid JSON, try next
+function stripTrailingCommas(content: string): string {
+  return content.replace(/,(\s*[}\]])/g, '$1')
+}
+
+async function readOpenCodeConfig(): Promise<OpenCodeConfig | undefined> {
+  const configDirs: string[] = []
+  const envDir = process.env.OPENCODE_CONFIG_DIR
+  if (envDir) configDirs.push(envDir)
+  let dir = process.cwd()
+  while (true) {
+    configDirs.push(path.join(dir, '.opencode'))
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  configDirs.push(path.join(homedir(), '.config', 'opencode'))
+  configDirs.push(path.join(homedir(), '.opencode'))
+  for (const configDir of configDirs) {
+    for (const ext of ['.json', '.jsonc']) {
+      const configPath = path.join(configDir, `opencode${ext}`)
+      try {
+        let content = await readFile(configPath, 'utf-8')
+        if (ext === '.jsonc') {
+          content = stripJsoncComments(content)
+          content = stripTrailingCommas(content)
+        }
+        return JSON.parse(content) as OpenCodeConfig
+      } catch { /* try next */ }
     }
   }
   return undefined
