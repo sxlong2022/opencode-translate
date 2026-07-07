@@ -1,12 +1,8 @@
-import type { Plugin, PluginInput, PluginOptions, PluginModule } from "@opencode-ai/plugin"
+import type { Plugin, PluginInput, PluginOptions } from "@opencode-ai/plugin"
 import { createHooks } from "./activation"
 
-const OpencodeTranslate: Plugin = async (ctx: PluginInput, options?: PluginOptions) =>
+const plugin: Plugin = async (ctx: PluginInput, options?: PluginOptions) =>
   createHooks(ctx, options ?? {})
 
-const pluginModule: PluginModule = {
-  id: "opencode-translate",
-  server: OpencodeTranslate,
-}
-
-export default pluginModule
+export default plugin
+export { plugin }
