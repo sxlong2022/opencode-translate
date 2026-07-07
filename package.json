@@ -40,7 +40,7 @@
     "build": "bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external @ai-sdk/anthropic --external @ai-sdk/openai --external @ai-sdk/google --external @ai-sdk/google-vertex --external @ai-sdk/amazon-bedrock --external @ai-sdk/openai-compatible --external ai"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.14.0"
+    "@opencode-ai/plugin": ">=1.17.14"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.96",
@@ -53,7 +53,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
-    "@opencode-ai/plugin": "^1.14.21",
+    "@opencode-ai/plugin": "^1.17.14",
     "@types/node": "^25.6.0",
     "@typescript/native-preview": "beta",
     "bun-types": "^1.3.13"
