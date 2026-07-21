@@ -366,25 +366,28 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           disabledThisTurn = true
         }
 
-let match: TriggerMatch | undefined
-        if (!activeState && !disabledThisTurn && resolved.canActivate) {
+        let match: TriggerMatch | undefined
+        if (!disabledThisTurn && (activeState || resolved.canActivate)) {
           match = findTriggerMatch(output.parts as TextPartLike[], options.triggerKeywords)
           if (match) {
             const part = output.parts[match.partArrayIndex] as TextPartLike & { text: string }
             const originalText = part.text
             part.text = stripTriggerKeyword(part.text, match.keyword, match.offset)
-            activeState = createState(options)
-            if (!NONCE_PATTERN.test(activeState.translate_nonce)) {
-              part.text = originalText
-              await logError(client, new Error("Generated invalid translation nonce"))
-              return
+            if (!activeState) {
+              activeState = createState(options)
+              if (!NONCE_PATTERN.test(activeState.translate_nonce)) {
+                part.text = originalText
+                await logError(client, new Error("Generated invalid translation nonce"))
+                return
+              }
             }
             activatedThisTurn = true
             sessionStateCache.set(input.sessionID, activeState)
-          } else if (resolved.canActivate) {
+          } else if (!activeState && resolved.canActivate) {
             sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
           }
         }
+
 
         if (!activeState && !disabledThisTurn) return
 
