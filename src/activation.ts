@@ -353,6 +353,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
       try {
         const resolved = await resolveSessionState(client, ctx.directory, input.sessionID)
         let activeState = resolved.state
+        const wasActiveBeforeTrigger = !!activeState
         let activatedThisTurn = false
         let disabledThisTurn = false
 
@@ -496,10 +497,11 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           )
         }
 
-        // If we activated this turn but translation failed for every
-        // user-authored part, roll back activation so the next turn does a
-        // clean retry instead of cementing broken state.
-        if (activatedThisTurn && translationErrors.length > 0 && eligibleIndex === translationErrors.length) {
+        // If this was the FIRST activation this turn and translation failed for every
+        // user-authored part, roll back activation so the next turn does a clean retry
+        // instead of cementing a broken state. If the session was already active before
+        // this turn, we keep the existing state so the user still sees the status banner.
+        if (activatedThisTurn && !wasActiveBeforeTrigger && translationErrors.length > 0 && eligibleIndex === translationErrors.length) {
           sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
           return
         }
