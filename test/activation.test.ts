@@ -741,6 +741,79 @@ describe("activation", () => {
     expect(output6.parts[1].text).toBe("✗ Translation disabled")
   })
 
+  test("$en re-activation in already-active session still shows banner even if translation fails", async () => {
+    const state = makeState()
+    const hooks = createHooks(
+      {
+        client: fakeClient([
+          storedMessage([
+            {
+              id: "banner_1",
+              sessionID: "ses_fail_reactivate",
+              messageID: "msg_1",
+              type: "text",
+              text: "✓ Translation enabled",
+              synthetic: false,
+              ignored: true,
+              metadata: {
+                translate_role: "activation_banner",
+                ...state,
+              },
+            },
+          ]),
+        ]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko" },
+      {
+        translator: {
+          translateText: async () => {
+            throw new Error("Network timeout")
+          },
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_2" },
+      parts: [textPart("p1", "$en 두번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_fail_reactivate" }, output as never)
+    // Should keep the session active and show the enabled banner, even though
+    // the current message could not be translated.
+    expect(output.parts).toHaveLength(3) // original + failure notice + activation banner
+    expect(output.parts[0].text).toBe("두번째") // $en stripped
+    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_failure")
+    expect(output.parts[2].text).toContain("Translation enabled")
+  })
+
+  test("first $en activation with all translations failing rolls back without banner", async () => {
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko" },
+      {
+        translator: {
+          translateText: async () => {
+            throw new Error("Network timeout")
+          },
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_1" },
+      parts: [textPart("p1", "$en 안녕")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_first_fail" }, output as never)
+    // No activation, no banner, original text preserved (with $en stripped).
+    expect(output.parts).toHaveLength(1)
+    expect(output.parts[0].text).toBe("안녕")
+  })
+
+
   test("passthrough result does NOT show fallback banner", async () => {
     const hooks = createHooks(
       {
