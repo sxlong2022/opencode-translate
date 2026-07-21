@@ -711,11 +711,35 @@ describe("activation", () => {
     expect(calls).toBe(2)
     expect(output3.parts).toHaveLength(3) // original, twin, banner
     expect(output3.parts[1].text).toBe("EN:세번째")
-    expect(output3.parts[1].text).toBe("EN:세번째")
+
+    // 4. Send $en again in an ALREADY active session -> strips $en and shows enabled banner again
+    const output4 = {
+      message: { id: "msg_4" },
+      parts: [textPart("p4", "$en 네번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output4 as never)
+    expect(calls).toBe(3)
+    expect(output4.parts).toHaveLength(3) // original, twin, banner
+    expect(output4.parts[0].text).toBe("네번째") // $en stripped
+    expect(output4.parts[2].text).toContain("Translation enabled")
+
+    // 5. Send $dis twice in a row -> strips $dis and shows disabled banner
+    const output5 = {
+      message: { id: "msg_5" },
+      parts: [textPart("p5", "$dis")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output5 as never)
+    expect(output5.parts).toHaveLength(2)
+    expect(output5.parts[1].text).toBe("✗ Translation disabled")
+
+    const output6 = {
+      message: { id: "msg_6" },
+      parts: [textPart("p6", "$dis")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_toggle" }, output6 as never)
+    expect(output6.parts).toHaveLength(2)
+    expect(output6.parts[1].text).toBe("✗ Translation disabled")
   })
-
-
-
 
   test("passthrough result does NOT show fallback banner", async () => {
     const hooks = createHooks(
@@ -796,5 +820,5 @@ describe("activation", () => {
     expect(calls).toBe(1) // still 1, "continue" was skipped
     expect(output3.parts).toHaveLength(1) // no LLM-only twin
   })
-
 })
+
