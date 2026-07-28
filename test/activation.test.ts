@@ -787,6 +787,53 @@ describe("activation", () => {
     expect(output.parts[2].text).toContain("Translation enabled")
   })
 
+  test("$en re-activation in already-active session still shows banner if translator returns passthrough", async () => {
+    const state = makeState()
+    const hooks = createHooks(
+      {
+        client: fakeClient([
+          storedMessage([
+            {
+              id: "banner_1",
+              sessionID: "ses_passthrough_reactivate",
+              messageID: "msg_1",
+              type: "text",
+              text: "✓ Translation enabled",
+              synthetic: false,
+              ignored: true,
+              metadata: {
+                translate_role: "activation_banner",
+                ...state,
+              },
+            },
+          ]),
+        ]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "ko", displayLanguage: "ko" },
+      {
+        translator: {
+          translateText: async () => ({
+            text: "두번째", // passthrough returns original text
+            modelUsed: "passthrough",
+          }),
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_2" },
+      parts: [textPart("p1", "$en 두번째")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_passthrough_reactivate" }, output as never)
+    // Should keep the session active and show the enabled banner, even though
+    // the current message could not be translated.
+    expect(output.parts).toHaveLength(3) // original + failure notice + activation banner
+    expect(output.parts[0].text).toBe("두번째") // $en stripped
+    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_failure")
+    expect(output.parts[2].text).toContain("Translation enabled")
+  })
+
   test("first $en activation with all translations failing rolls back without banner", async () => {
     const hooks = createHooks(
       {
@@ -814,7 +861,7 @@ describe("activation", () => {
   })
 
 
-  test("passthrough result does NOT show fallback banner", async () => {
+  test("passthrough result on first activation rolls back and does not activate", async () => {
     const hooks = createHooks(
       {
         client: fakeClient([]),
@@ -838,14 +885,9 @@ describe("activation", () => {
     }
     await hooks["chat.message"]!({ sessionID: "ses_passthrough" }, output as never)
 
-    // Should have: original + LLM-only twin + activation banner (no fallback banner)
-    expect(output.parts).toHaveLength(3)
-    expect(output.parts[2].text).toContain("Translation enabled")
-    // Crucially: no fallback banner
-    const fallbackBanner = output.parts.find((p) =>
-      typeof p.text === "string" && p.text.includes("Translation fallback")
-    )
-    expect(fallbackBanner).toBeUndefined()
+    // Should roll back: original part only (with $en stripped), no twin, no banner
+    expect(output.parts).toHaveLength(1)
+    expect(output.parts[0].text).toBe("안녕")
   })
 
   test("ASCII-only English inputs are not translated", async () => {

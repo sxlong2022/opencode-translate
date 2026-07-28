@@ -451,7 +451,8 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
 
           const result = translationResults.find((r) => r.part === part)!
 
-          if (result.success) {
+          const isPassthrough = result.success && result.modelUsed === "passthrough"
+          if (result.success && !isPassthrough) {
             const english = result.text!
             if (options.fallbackModel && result.modelUsed === options.fallbackModel) {
               fallbackUsedModel = result.modelUsed
@@ -472,12 +473,13 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               }),
             )
           } else {
-            translationErrors.push({ part, error: result.error! })
+            const error = isPassthrough ? new Error("Both primary and fallback models failed") : result.error!
+            translationErrors.push({ part, error })
             nextParts.push(
               createSyntheticTextPart(
                 part.sessionID,
                 part.messageID,
-                `⚠️ Translation failed: ${normalizeReason(result.error!)}. Original text will be sent to the model.`,
+                `⚠️ Translation failed: ${normalizeReason(error)}. Original text will be sent to the model.`,
                 {
                   translate_role: "translation_failure",
                   translate_nonce: activeState!.translate_nonce,
