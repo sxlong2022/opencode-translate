@@ -4,6 +4,8 @@ import {
   createHooks,
   extractStoredState,
   findTriggerMatch,
+  parseSlashCommandText,
+  reassembleSlashCommandText,
   stripTriggerKeyword,
 } from "../src/activation"
 import type { MessageWithPartsLike, PluginClientLike, TextPartLike, TranslateState } from "../src/constants"
@@ -118,6 +120,60 @@ describe("activation", () => {
     expect(stripTriggerKeyword("hello\n$en world", "$en", 6)).toBe("hello\nworld")
     expect(stripTriggerKeyword("hello $en\nworld", "$en", 6)).toBe("hello\nworld")
     expect(stripTriggerKeyword("literal $en and trigger $en", "$en", 8)).toBe("literal and trigger $en")
+  })
+
+  test("slash command parsing and reassembly preserves command prefix and internal markers", () => {
+    const p1 = parseSlashCommandText("/init")
+    expect(p1.commandPrefix).toBe("/init")
+    expect(p1.content).toBe("")
+    expect(reassembleSlashCommandText(p1, "")).toBe("/init")
+
+    const p2 = parseSlashCommandText("/init-deep --create-new 请初始化项目")
+    expect(p2.commandPrefix).toBe("/init-deep --create-new")
+    expect(p2.content).toBe("请初始化项目")
+    expect(reassembleSlashCommandText(p2, "Please initialize the project")).toBe("/init-deep --create-new Please initialize the project")
+
+    const p3 = parseSlashCommandText("<!-- OMO_INTERNAL_INITIATOR -->\n/init")
+    expect(p3.leadingComments).toBe("<!-- OMO_INTERNAL_INITIATOR -->\n")
+    expect(p3.commandPrefix).toBe("/init")
+    expect(p3.content).toBe("")
+    expect(reassembleSlashCommandText(p3, "")).toBe("<!-- OMO_INTERNAL_INITIATOR -->\n/init")
+  })
+
+  test("slash command /init activates translation and preserves /init prefix in LLM part", async () => {
+    let calls = 0
+    const hooks = createHooks(
+      {
+        client: fakeClient([]),
+        directory: "/workspace",
+      } as never,
+      { sourceLanguage: "zh", displayLanguage: "zh" },
+      {
+        translator: {
+          translateText: async ({ text }) => {
+            calls += 1
+            return { text: `EN:${text}`, modelUsed: "test/model" }
+          },
+        },
+      },
+    )
+
+    const output = {
+      message: { id: "msg_init" },
+      parts: [textPart("p1", "$en /init-deep 请初始化结构")],
+    }
+
+    await hooks["chat.message"]!({ sessionID: "ses_1" }, output as never)
+
+    // Translation should activate
+    expect(output.parts).toHaveLength(3)
+    // Part 0: user part with stripped trigger -> "/init-deep 请初始化结构"
+    expect((output.parts[0] as TextPartLike).text).toBe("/init-deep 请初始化结构")
+    // Part 1: LLM-only part -> "/init-deep EN:请初始化结构" (preserves /init-deep command!)
+    expect((output.parts[1] as TextPartLike).synthetic).toBe(true)
+    expect((output.parts[1] as TextPartLike).text).toBe("/init-deep EN:请初始化结构")
+    // Part 2: Activation banner
+    expect((output.parts[2] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
   })
 
   test("multiple keywords match as a disjunction", () => {
@@ -933,7 +989,6 @@ describe("activation", () => {
     }
     await hooks["chat.message"]!({ sessionID: "ses_ascii2" }, output3 as never)
     expect(calls).toBe(1) // still 1, "continue" was skipped
-    expect(output3.parts).toHaveLength(1) // no LLM-only twin
+expect(output3.parts).toHaveLength(1) // no LLM-only twin
   })
 })
-

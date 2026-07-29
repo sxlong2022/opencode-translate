@@ -287,12 +287,13 @@ export function isUserAuthoredTextPart(part: TextPartLike): part is TextPartLike
 return isTextPart(part) && part.synthetic !== true && part.ignored !== true
 }
 
-const ASCII_PRINTABLE_RE = /^[\x20-\x7e]+$/
+const ASCII_PRINTABLE_RE = /^[\x09\x0a\x0d\x20-\x7e]+$/
 
-export function isAsciiOnlyText(part: TextPartLike & { text: string }): boolean {
-  const trimmed = part.text.trim()
+export function isAsciiOnlyText(input: (TextPartLike & { text: string }) | string): boolean {
+  const text = typeof input === "string" ? input : input.text
+  const trimmed = text.trim()
   if (trimmed.length === 0) return true
-  // Must be entirely printable ASCII (no Chinese, Japanese, Korean chars).
+  // Must be entirely printable ASCII + whitespace (no Chinese, Japanese, Korean chars).
   // This lets simple English like "ok", "continue", "y" pass through without trigger.
   return ASCII_PRINTABLE_RE.test(trimmed)
 }

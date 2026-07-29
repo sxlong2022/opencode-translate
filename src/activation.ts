@@ -208,6 +208,73 @@ function isTranslatedUserDisplayPart(part: TextPartLike): boolean {
   return extractStateFromMetadata(asMetadata(part)) !== undefined
 }
 
+export interface ParsedSlashCommandText {
+  leadingComments: string
+  commandPrefix: string
+  content: string
+  trailingComments: string
+}
+
+export function parseSlashCommandText(text: string): ParsedSlashCommandText {
+  let remaining = text
+  let leadingComments = ""
+  let trailingComments = ""
+
+  const leadingCommentRegex = /^\s*(<!--[\s\S]*?-->\s*)*/
+  const leadingMatch = leadingCommentRegex.exec(remaining)
+  if (leadingMatch && leadingMatch[0]) {
+    leadingComments = leadingMatch[0]
+    remaining = remaining.slice(leadingComments.length)
+  }
+
+  const trailingCommentRegex = /(\s*<!--[\s\S]*?-->\s*)+$/
+  const trailingMatch = trailingCommentRegex.exec(remaining)
+  if (trailingMatch && trailingMatch[0]) {
+    trailingComments = trailingMatch[0]
+    remaining = remaining.slice(0, remaining.length - trailingComments.length)
+  }
+
+  let commandPrefix = ""
+  let content = remaining
+
+  const slashCmdRegex = /^(\/([a-zA-Z0-9_\-\/]+)(\s+--?[a-zA-Z0-9_\-\=]+)*)(\s+|$)/
+  const cmdMatch = slashCmdRegex.exec(remaining)
+
+  if (cmdMatch) {
+    commandPrefix = cmdMatch[1]
+    content = remaining.slice(cmdMatch[0].length)
+  }
+
+  return {
+    leadingComments,
+    commandPrefix,
+    content,
+    trailingComments,
+  }
+}
+
+export function reassembleSlashCommandText(
+  parsed: ParsedSlashCommandText,
+  translatedContent: string,
+): string {
+  const parts: string[] = []
+  if (parsed.leadingComments) parts.push(parsed.leadingComments)
+
+  if (parsed.commandPrefix) {
+    if (translatedContent.trim().length > 0) {
+      parts.push(`${parsed.commandPrefix} ${translatedContent.trim()}`)
+    } else {
+      parts.push(parsed.commandPrefix)
+    }
+  } else {
+    parts.push(translatedContent)
+  }
+
+  if (parsed.trailingComments) parts.push(parsed.trailingComments)
+
+  return parts.join("")
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -400,7 +467,11 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
         }
 
         // Step 1: Collect eligible parts that need translation
-        const eligibleParts: Array<{ part: TextPartLike; currentEligibleIndex: number }> = []
+        const eligibleParts: Array<{
+          part: TextPartLike
+          currentEligibleIndex: number
+          parsed: ParsedSlashCommandText
+        }> = []
         let partArrayIndex = -1
         let eligibleIndex = 0
 
@@ -409,9 +480,12 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           if (!activeState) continue
           if (!isUserAuthoredTextPart(part)) continue
           if (part.text.trim().length === 0) continue
-          if (isAsciiOnlyText(part) && !triggerKeywordPartIndices.has(partArrayIndex)) continue
 
-          eligibleParts.push({ part, currentEligibleIndex: eligibleIndex })
+          const parsed = parseSlashCommandText(part.text)
+          if (parsed.content.trim().length === 0) continue
+          if (isAsciiOnlyText(parsed.content) && !triggerKeywordPartIndices.has(partArrayIndex)) continue
+
+          eligibleParts.push({ part, currentEligibleIndex: eligibleIndex, parsed })
           eligibleIndex += 1
         }
 
@@ -423,15 +497,16 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           modelUsed?: string
           error?: unknown
         }> = await Promise.all(
-          eligibleParts.map(async ({ part }) => {
+          eligibleParts.map(async ({ part, parsed }) => {
             try {
               const result = await translator.translateText({
-                text: part.text ?? "",
+                text: parsed.content,
                 sourceLanguage: activeState!.translate_source_lang,
                 targetLanguage: LLM_LANGUAGE,
                 direction: "inbound",
               })
-              return { part, success: true, text: result.text, modelUsed: result.modelUsed }
+              const reassembled = reassembleSlashCommandText(parsed, result.text)
+              return { part, success: true, text: reassembled, modelUsed: result.modelUsed }
             } catch (error) {
               return { part, success: false, error }
             }
