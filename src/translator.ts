@@ -168,7 +168,9 @@ const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-const PRIMARY_TIMEOUT_MS = 5_000
+// Tuned for Gitee (primary ~562ms p50, worst case ~733ms) so 3s = ~5× headroom
+// while leaving 5s of the 8s total budget for the fallback model.
+const PRIMARY_TIMEOUT_MS = 3_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
