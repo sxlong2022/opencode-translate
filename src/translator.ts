@@ -168,24 +168,26 @@ const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-// Tuned for DiffusionGemma (primary ~918ms p50) so 5s = ~5× headroom
-// while leaving 3s of the 8s total budget for the fallback model.
-const PRIMARY_TIMEOUT_MS = 5_000
+// Set to 4,000ms so primary and fallback each receive an equal 4s budget (4s + 4s = 8s total).
+const PRIMARY_TIMEOUT_MS = 4_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (error) => {
-        clearTimeout(timer)
-        reject(error)
-      },
-    )
-  })
+    if (typeof timer === "object" && timer && "unref" in timer && typeof (timer as { unref?: () => void }).unref === "function") {
+      ;(timer as { unref: () => void }).unref()
+    }
+promise.then(
+(value) => {
+clearTimeout(timer)
+resolve(value)
+},
+(error) => {
+clearTimeout(timer)
+reject(error)
+},
+)
+})
 }
 
 const providerFactoryCache = new Map<string, unknown>()
@@ -473,10 +475,9 @@ export function createTranslator(
 
     async function attemptTranslation(modelString: string, { retry = true, deadline = Infinity } = {}): Promise<string> {
       const { providerID, modelID } = parseTranslatorModel(modelString)
-const credentials = await credentialResolver.resolve(modelString)
-const resolvedBaseURL = await resolveBaseURL(providerID)
+      const credentials = await credentialResolver.resolve(modelString)
+      const resolvedBaseURL = await resolveBaseURL(providerID)
       const resolvedApiKey = !credentials.apiKey ? await resolveApiKey(providerID) : undefined
-
       const baseFetch = credentials.fetch ?? fetch
       const robustFetch: FetchLike = async (input, init) => {
         let lastError: unknown
@@ -531,6 +532,10 @@ baseURL: resolvedBaseURL,
 
       const doTranslate = async () => {
         try {
+          const isPrimaryWithFallback = modelString === options.translatorModel && Boolean(options.fallbackModel)
+          const effectiveTimeout = isPrimaryWithFallback
+            ? Math.min(PRIMARY_TIMEOUT_MS, Math.max(0, deadline - now()))
+            : Math.min(timeoutMs, Math.max(0, deadline - now()))
           const result = (await withTimeout(
             generateTextImpl({
               model: model as never,
@@ -548,7 +553,7 @@ baseURL: resolvedBaseURL,
               maxRetries: 0,
               ...(modelProviderOptions ? { providerOptions: modelProviderOptions as never } : {}),
             }) as Promise<{ text: string }>,
-            retry ? Math.min(timeoutMs, Math.max(0, deadline - now())) : Math.min(PRIMARY_TIMEOUT_MS, Math.max(0, deadline - now())),
+            effectiveTimeout,
             "Translator generateText",
           )) as { text: string }
           return unwrapEchoedTextEnvelope(result.text)
@@ -573,20 +578,17 @@ baseURL: resolvedBaseURL,
     let translated: string
     let usedModel = options.translatorModel
     try {
-      // Primary: fast-fail when fallback is available, so fallback gets remaining budget
       translated = await attemptTranslation(options.translatorModel, { retry: !options.fallbackModel, deadline })
     } catch (primaryError) {
       if (options.fallbackModel) {
         const remaining = deadline - now()
         if (remaining <= 500) {
-          // Not enough time for a meaningful fallback attempt — return original text
           return { text: input.text, modelUsed: "passthrough" }
         }
         usedModel = options.fallbackModel
         try {
-          // Fallback: single attempt within remaining budget (total deadline is the safety net)
           translated = await attemptTranslation(options.fallbackModel, { retry: false, deadline })
-        } catch {
+        } catch (fallbackError) {
           // Both models failed within budget — return original text
           return { text: input.text, modelUsed: "passthrough" }
         }
