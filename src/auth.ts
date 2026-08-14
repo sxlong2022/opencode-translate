@@ -173,7 +173,7 @@ async function readAuthMap(deps: AuthDependencies): Promise<Record<string, AuthI
   const filePath = authFilePath()
   try {
     const fileStat = await (deps.stat ?? stat)(filePath)
-    if ((fileStat.mode & 0o777) !== 0o600) return undefined
+    if (process.platform !== "win32" && (fileStat.mode & 0o777) !== 0o600) return undefined
     const raw = await (deps.readFile ?? readFile)(filePath, "utf8")
     const parsed = JSON.parse(raw) as Record<string, AuthInfo>
     return parsed && typeof parsed === "object" ? parsed : undefined
@@ -491,6 +491,14 @@ export function createCredentialResolver(
 
     if (provider?.key === undefined && (provider?.env.length ?? 0) > 1) {
       const resolved = { providerID, provider, mode: "default" as const }
+      credentialCache.set(providerID, resolved)
+      return resolved
+    }
+
+    const authMap = await readAuthMap(deps)
+    const authEntry = authMap?.[providerID]
+    if (authEntry && authEntry.type === "api" && typeof (authEntry as { key?: unknown }).key === "string" && (authEntry as { key: string }).key) {
+      const resolved = { providerID, provider, apiKey: (authEntry as { key: string }).key, mode: "apiKey" as const }
       credentialCache.set(providerID, resolved)
       return resolved
     }

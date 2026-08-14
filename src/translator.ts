@@ -131,7 +131,10 @@ async function resolveProviderFromConfig(
   }
 
   if (provider.options?.apiKey) {
-    result.apiKey = resolveEnvVar(provider.options.apiKey)
+    const key = resolveEnvVar(provider.options.apiKey)
+    if (key) {
+      result.apiKey = key
+    }
   }
 
   return result
@@ -192,6 +195,13 @@ reject(error)
 
 const providerFactoryCache = new Map<string, unknown>()
 let modelsDevCache: Record<string, { api?: string }> | undefined
+
+const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
+  groq: "https://api.groq.com/openai/v1",
+  siliconflow: "https://api.siliconflow.cn/v1",
+  sensenova: "https://token.sensenova.cn/v1",
+  xfyun: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+}
 
 async function resolveModelsDevBaseURL(providerID: string): Promise<string | undefined> {
   if (!modelsDevCache) {
@@ -435,10 +445,11 @@ export function createTranslator(
       // Ignore errors from provider list
     }
 
-    // Final fallback: models.dev catalog (covers built-in openai-compatible providers
-    // like nvidia whose endpoint is not exposed in provider.list() options)
+// Final fallback: models.dev catalog (covers built-in openai-compatible providers
+// like nvidia whose endpoint is not exposed in provider.list() options)
+    if (KNOWN_PROVIDER_BASE_URLS[providerID]) return KNOWN_PROVIDER_BASE_URLS[providerID]
     return resolveModelsDevBaseURL(providerID)
-  }
+}
 
   async function resolveApiKey(providerID: string): Promise<string | undefined> {
     // Explicit apiKey in plugin options takes precedence
@@ -597,7 +608,7 @@ baseURL: resolvedBaseURL,
       }
     }
 
-    if (options.verbose) {
+    if (options.verbose && client.app?.log) {
       await client.app.log({
         body: {
           service: PLUGIN_NAME,
@@ -741,7 +752,7 @@ baseURL: resolvedBaseURL,
       }
     }
 
-    if (options.verbose) {
+    if (options.verbose && client.app?.log) {
       await client.app.log({
         body: {
           service: PLUGIN_NAME,
