@@ -197,10 +197,11 @@ const providerFactoryCache = new Map<string, unknown>()
 let modelsDevCache: Record<string, { api?: string }> | undefined
 
 const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
-  groq: "https://api.groq.com/openai/v1",
+groq: "https://api.groq.com/openai/v1",
   siliconflow: "https://api.siliconflow.cn/v1",
-  sensenova: "https://token.sensenova.cn/v1",
-  xfyun: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+  siliconflow_native: "https://api.siliconflow.cn/v1",
+sensenova: "https://token.sensenova.cn/v1",
+xfyun: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
 }
 
 async function resolveModelsDevBaseURL(providerID: string): Promise<string | undefined> {
