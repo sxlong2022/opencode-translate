@@ -197,11 +197,11 @@ const providerFactoryCache = new Map<string, unknown>()
 let modelsDevCache: Record<string, { api?: string }> | undefined
 
 const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
-groq: "https://api.groq.com/openai/v1",
+  groq: "https://api.groq.com/openai/v1",
   siliconflow: "https://api.siliconflow.cn/v1",
   siliconflow_native: "https://api.siliconflow.cn/v1",
-sensenova: "https://token.sensenova.cn/v1",
-xfyun: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+  sensenova: "https://token.sensenova.cn/v1",
+  xfyun: "https://maas-api.cn-huabei-1.xf-yun.com/v2",
 }
 
 async function resolveModelsDevBaseURL(providerID: string): Promise<string | undefined> {
@@ -404,8 +404,25 @@ export function createTranslator(
   options: ResolvedTranslateOptions,
   deps: TranslatorDependencies = {},
 ) {
-  // Bypasses proxy for Gitee AI (fallback) domains
-  const bypassHosts = ["ai.gitee.com", "gitee.com"];
+  // Bypasses proxy for domestic API / fallback domains to guarantee true direct connection
+  const bypassHosts = [
+    "api.siliconflow.cn",
+    "siliconflow.cn",
+    "maas-api.cn-huabei-1.xf-yun.com",
+    "xf-yun.com",
+    "xfyun.cn",
+    "token.sensenova.cn",
+    "sensenova.cn",
+    "api-inference.modelscope.cn",
+    "modelscope.cn",
+    "chat.intern-ai.org.cn",
+    "intern-ai.org.cn",
+    "api.edgefn.net",
+    "edgefn.net",
+    "copilot.tencent.com",
+    "ai.gitee.com",
+    "gitee.com",
+  ];
   for (const envKey of ["NO_PROXY", "no_proxy"]) {
     const current = process.env[envKey];
     if (current) {
