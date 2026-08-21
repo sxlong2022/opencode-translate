@@ -171,8 +171,8 @@ const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-// Set to 4,000ms so primary and fallback each receive an equal 4s budget (4s + 4s = 8s total).
-const PRIMARY_TIMEOUT_MS = 4_000
+// Set to 3,000ms for fast primary models (like Groq ~500ms), giving fallback a generous 5s budget (3s + 5s = 8s total).
+const PRIMARY_TIMEOUT_MS = 3_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
 return new Promise<T>((resolve, reject) => {
