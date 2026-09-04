@@ -171,8 +171,8 @@ const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-// Set to 3,000ms for fast primary models (like Groq ~500ms), giving fallback a generous 5s budget (3s + 5s = 8s total).
-const PRIMARY_TIMEOUT_MS = 3_000
+// Set to 5,000ms for primary model (e.g. Cloudflare Gemma ~2.4s), giving fallback 3s budget (5s + 3s = 8s total).
+const PRIMARY_TIMEOUT_MS = 5_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
 return new Promise<T>((resolve, reject) => {
@@ -207,7 +207,7 @@ const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
 async function resolveModelsDevBaseURL(providerID: string): Promise<string | undefined> {
   if (!modelsDevCache) {
     try {
-      const res = await fetch("https://models.dev/api.json")
+      const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(2500) })
       if (res.ok) {
         const data = (await res.json()) as Record<string, { api?: string }>
         modelsDevCache = data
