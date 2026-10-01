@@ -171,8 +171,8 @@ const DEFAULT_TRANSLATE_TIMEOUT_MS = 15_000
 const TOTAL_BUDGET_MS = 8_000
 // Per-call cap for the primary model when fallback is available — fail fast
 // so the fallback gets a chance within the remaining budget.
-// Set to 5,000ms for primary model (e.g. Cloudflare Gemma ~2.4s), giving fallback 3s budget (5s + 3s = 8s total).
-const PRIMARY_TIMEOUT_MS = 5_000
+// Set to 3,000ms for fast primary models (e.g. Groq ~1s), giving fallback a generous 5s budget (3s + 5s = 8s total).
+const PRIMARY_TIMEOUT_MS = 3_000
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
 return new Promise<T>((resolve, reject) => {
