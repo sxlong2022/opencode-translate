@@ -2,3 +2,11 @@ node_modules/
 .DS_Store
 coverage/
 dist/
+
+# contains provider endpoint config; deliberately untracked after AUTH_KEY leak
+translation-experiment.mjs
+
+# local benchmark output and ad-hoc provider probe scripts
+benchmark-results/
+scripts/compare-qwen-internlm.ts
+scripts/test-xfyun-performance.ts
