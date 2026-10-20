@@ -68,7 +68,7 @@ interface HookDependencies {
       sourceLanguage: string
       targetLanguage: string
       direction: "inbound" | "outbound"
-    }): Promise<{ text: string; modelUsed: string }>
+    }): Promise<{ text: string; modelUsed: string; failureReason?: string }>
     translateTexts?(input: {
       texts: readonly string[]
       sourceLanguage: string
@@ -420,7 +420,6 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
       try {
         const resolved = await resolveSessionState(client, ctx.directory, input.sessionID)
         let activeState = resolved.state
-        const wasActiveBeforeTrigger = !!activeState
         let activatedThisTurn = false
         let disabledThisTurn = false
 
@@ -496,6 +495,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           text?: string
           modelUsed?: string
           error?: unknown
+          failureReason?: string
         }> = await Promise.all(
           eligibleParts.map(async ({ part, parsed }) => {
             try {
@@ -506,7 +506,7 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
                 direction: "inbound",
               })
               const reassembled = reassembleSlashCommandText(parsed, result.text)
-              return { part, success: true, text: reassembled, modelUsed: result.modelUsed }
+              return { part, success: true, text: reassembled, modelUsed: result.modelUsed, failureReason: result.failureReason }
             } catch (error) {
               return { part, success: false, error }
             }
@@ -548,7 +548,13 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
               }),
             )
           } else {
-            const error = isPassthrough ? new Error("Both primary and fallback models failed") : result.error!
+            const error = isPassthrough
+              ? new Error(
+                  result.failureReason
+                    ? `Both primary and fallback models failed (${result.failureReason})`
+                    : "Both primary and fallback models failed",
+                )
+              : result.error!
             translationErrors.push({ part, error })
             nextParts.push(
               createSyntheticTextPart(
@@ -574,14 +580,12 @@ export function createHooks(ctx: PluginInput, rawOptions: PluginOptions = {}, de
           )
         }
 
-        // If this was the FIRST activation this turn and translation failed for every
-        // user-authored part, roll back activation so the next turn does a clean retry
-        // instead of cementing a broken state. If the session was already active before
-        // this turn, we keep the existing state so the user still sees the status banner.
-        if (activatedThisTurn && !wasActiveBeforeTrigger && translationErrors.length > 0 && eligibleIndex === translationErrors.length) {
-          sessionStateCache.set(input.sessionID, INACTIVE_ROOT_SESSION)
-          return
-        }
+        // Deliberately keep translation enabled when the first activation's
+        // translation fails. Returning early here used to discard `nextParts`
+        // entirely — including the failure notice — so the user saw no banner,
+        // no error, and no translation, which is indistinguishable from
+        // "$en was ignored". Keeping the state active mirrors the
+        // re-activation path: the user sees both the failure notice and the banner.
 
         if (activatedThisTurn) {
           nextParts.push(

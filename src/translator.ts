@@ -496,7 +496,7 @@ export function createTranslator(
     return undefined
   }
 
-  async function translateText(input: TranslateTextInput): Promise<{ text: string; modelUsed: string }> {
+  async function translateText(input: TranslateTextInput): Promise<{ text: string; modelUsed: string; failureReason?: string }> {
     if (!input.text) return { text: input.text, modelUsed: options.translatorModel }
     if (input.sourceLanguage === input.targetLanguage) return { text: input.text, modelUsed: options.translatorModel }
 
@@ -612,14 +612,22 @@ baseURL: resolvedBaseURL,
       if (options.fallbackModel) {
         const remaining = deadline - now()
         if (remaining <= 500) {
-          return { text: input.text, modelUsed: "passthrough" }
+          return {
+            text: input.text,
+            modelUsed: "passthrough",
+            failureReason: "translation budget exhausted before the fallback model could run",
+          }
         }
         usedModel = options.fallbackModel
         try {
           translated = await attemptTranslation(options.fallbackModel, { retry: false, deadline })
         } catch (fallbackError) {
           // Both models failed within budget — return original text
-          return { text: input.text, modelUsed: "passthrough" }
+          return {
+            text: input.text,
+            modelUsed: "passthrough",
+            failureReason: `primary: ${normalizeReason(primaryError)}; fallback: ${normalizeReason(fallbackError)}`,
+          }
         }
       } else {
         throw primaryError

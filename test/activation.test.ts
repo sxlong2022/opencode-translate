@@ -890,7 +890,8 @@ describe("activation", () => {
     expect(output.parts[2].text).toContain("Translation enabled")
   })
 
-  test("first $en activation with all translations failing rolls back without banner", async () => {
+  test("first $en activation with all translations failing keeps translation enabled and surfaces the failure", async () => {
+    let calls = 0
     const hooks = createHooks(
       {
         client: fakeClient([]),
@@ -899,8 +900,10 @@ describe("activation", () => {
       { sourceLanguage: "ko", displayLanguage: "ko" },
       {
         translator: {
-          translateText: async () => {
-            throw new Error("Network timeout")
+          translateText: async ({ text }) => {
+            calls += 1
+            if (calls === 1) throw new Error("Network timeout")
+            return { text: `EN:${text}`, modelUsed: "test/model" }
           },
         },
       },
@@ -911,13 +914,28 @@ describe("activation", () => {
       parts: [textPart("p1", "$en 안녕")],
     }
     await hooks["chat.message"]!({ sessionID: "ses_first_fail" }, output as never)
-    // No activation, no banner, original text preserved (with $en stripped).
-    expect(output.parts).toHaveLength(1)
+    // The trigger is honoured even though the first translation failed: the
+    // failure is surfaced and translation stays on.
+    expect(output.parts).toHaveLength(3) // original + failure notice + activation banner
     expect(output.parts[0].text).toBe("안녕")
+    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_failure")
+    expect((output.parts[1] as TextPartLike).text).toContain("Translation failed")
+    expect((output.parts[2] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
+
+    // The next turn must translate without a second $en.
+    const next = {
+      message: { id: "msg_2" },
+      parts: [textPart("p2", "다음")],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_first_fail" }, next as never)
+    const twin = next.parts.find(
+      (p) => (p as TextPartLike).metadata?.translate_role === "llm_only_translation",
+    ) as TextPartLike | undefined
+    expect(twin?.text).toBe("EN:다음")
   })
 
 
-  test("passthrough result on first activation rolls back and does not activate", async () => {
+  test("passthrough result on first activation still enables translation and surfaces the reason", async () => {
     const hooks = createHooks(
       {
         client: fakeClient([]),
@@ -930,6 +948,7 @@ describe("activation", () => {
             // Simulate both models failing — translator returns passthrough
             text: "안녕",
             modelUsed: "passthrough",
+            failureReason: "primary: 429 rate limit; fallback: timed out after 5000ms",
           }),
         },
       },
@@ -941,9 +960,12 @@ describe("activation", () => {
     }
     await hooks["chat.message"]!({ sessionID: "ses_passthrough" }, output as never)
 
-    // Should roll back: original part only (with $en stripped), no twin, no banner
-    expect(output.parts).toHaveLength(1)
+    // Translation stays on and the real upstream reason is visible to the user.
+    expect(output.parts).toHaveLength(3)
     expect(output.parts[0].text).toBe("안녕")
+    expect((output.parts[1] as TextPartLike).metadata?.translate_role).toBe("translation_failure")
+    expect((output.parts[1] as TextPartLike).text).toContain("429 rate limit")
+    expect((output.parts[2] as TextPartLike).metadata?.translate_role).toBe("activation_banner")
   })
 
   test("ASCII-only English inputs are not translated", async () => {
